@@ -66,6 +66,7 @@ BLOCKED_METHOD_PREFIXES = ("admin_", "personal_", "miner_", "debug_", "txpool_")
 MAX_BODY_BYTES = 512 * 1024
 CLAIMS_FILE = Path(os.environ.get("CLAIMS_FILE", str(Path.home() / ".elysium-lp-claims.json")))
 CLAIMS_LOCK = threading.Lock()
+REFERENCE_FILE = Path(os.environ.get("REFERENCE_FILE", str(Path.home() / ".elysium-lp-reference.json")))
 
 
 def _load_claims() -> dict[str, Any]:
@@ -84,6 +85,29 @@ def _save_claims(claims: dict[str, Any]) -> None:
         json.dump(claims, handle, ensure_ascii=False, separators=(",", ":"))
     os.chmod(tmp, 0o600)
     tmp.replace(CLAIMS_FILE)
+
+
+def _load_references() -> dict[str, Any]:
+    try:
+        with REFERENCE_FILE.open("r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_references(references: dict[str, Any]) -> None:
+    REFERENCE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = REFERENCE_FILE.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(references, handle, ensure_ascii=False, separators=(",", ":"))
+    os.chmod(tmp, 0o600)
+    tmp.replace(REFERENCE_FILE)
+
+
+def _reference_value(owner: str) -> Any:
+    with CLAIMS_LOCK:
+        return _load_references().get(owner.lower())
 
 
 def _owner_claims(owner: str) -> dict[str, Any]:
@@ -587,6 +611,14 @@ class LocalHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self._normalized_path(self.path)
+        if path == "/api/reference":
+            query = parse_qs(urlparse(self.path).query)
+            owner = (query.get("owner") or [""])[0].strip()
+            if not ADDRESS_RE.match(owner):
+                self._send_json({"error": "valid owner required"}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"owner": owner.lower(), "value": _reference_value(owner)})
+            return
         if path == "/api/claims":
             query = parse_qs(urlparse(self.path).query)
             owner = (query.get("owner") or [""])[0].strip()
@@ -629,6 +661,9 @@ class LocalHandler(BaseHTTPRequestHandler):
         if path == "/api/rpc":
             self._handle_rpc()
             return
+        if path == "/api/reference":
+            self._handle_reference()
+            return
         if path == "/api/claim":
             self._handle_claim()
             return
@@ -639,6 +674,29 @@ class LocalHandler(BaseHTTPRequestHandler):
             self._send_json(self.server.state.market.get(force=True))
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def _handle_reference(self) -> None:
+        raw = self._read_body()
+        if raw is None:
+            return
+        try:
+            payload = json.loads(raw)
+            owner = str(payload.get("owner", "")).lower()
+            value = float(payload.get("value") or 0)
+            if not ADDRESS_RE.match(owner) or not (0 <= value < 1e15):
+                raise ValueError("owner or value invalid")
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+        with CLAIMS_LOCK:
+            references = _load_references()
+            references[owner] = value
+            try:
+                _save_references(references)
+            except OSError as error:
+                self._send_json({"error": "reference store unavailable", "detail": str(error)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+        self._send_json({"ok": True, "owner": owner, "value": value})
 
     def _handle_claim(self) -> None:
         raw = self._read_body()

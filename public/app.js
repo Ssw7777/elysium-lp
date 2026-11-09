@@ -638,6 +638,20 @@
     return fresh;
   }
 
+  async function loadHypeReference() {
+    if (!state.wallet.address) return;
+    try {
+      const response = await fetch('api/reference?owner=' + encodeURIComponent(state.wallet.address), { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if (payload && payload.value != null && document.activeElement !== ui.hypeRefInput) {
+        state.hypeReference = Number(payload.value) || 0;
+        if (ui.hypeRefInput) ui.hypeRefInput.value = state.hypeReference > 0 ? String(state.hypeReference) : '';
+        updateHypeUi();
+      }
+    } catch (_) { /* local value remains */ }
+  }
+
   async function updateAuthState() {
     if (!ui.authState) return;
     if (!state.wallet.address) {
@@ -1104,6 +1118,7 @@
         positions = result.positions;
         hidden = result.hidden;
         await claimsPromise;
+        await loadHypeReference();
         state.balances = balances;
         state.positions = positions;
         state.hiddenEmpty = hidden;
@@ -2421,6 +2436,9 @@
       state.hypeReference = value;
       writeStorage('hype-reference', String(value));
       updateHypeUi();
+      if (state.wallet.address) {
+        fetch('api/reference', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ owner: state.wallet.address, value }) }).catch(() => {});
+      }
       toast('参考值已更新', value > 0 ? '参考 ' + fmtNum(value, 2) + ' HYPE' : '已隐藏参考', 'success');
     });
     if (ui.rangeMin) ui.rangeMin.addEventListener('input', applySliderTicks);

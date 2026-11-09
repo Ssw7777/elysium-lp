@@ -14,6 +14,7 @@ const BARK_SERVER = (process.env.BARK_SERVER || 'https://api.day.app').replace(/
 const CACHE_FILE = process.env.ENTRY_CACHE || path.join(process.env.HOME || '/tmp', '.elysium-lp-entry-cache.json');
 const CLAIMS_FILE = process.env.CLAIMS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-claims.json');
 const ACTIVE_FILE = process.env.ACTIVE_IDS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-active-ids.json');
+const REFERENCE_FILE = process.env.REFERENCE_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-reference.json');
 const DRY_RUN = String(process.env.DRY_RUN || '').trim() === '1';
 
 const ABI = {
@@ -56,6 +57,10 @@ function saveCache(cache) {
     fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
     fs.writeFileSync(CACHE_FILE, JSON.stringify(cache), { mode: 0o600 });
   } catch (_) { /* report can continue without cache */ }
+}
+
+function loadReference() {
+  try { return JSON.parse(fs.readFileSync(REFERENCE_FILE, 'utf8')); } catch (_) { return {}; }
 }
 
 function loadActiveState() {
@@ -398,7 +403,8 @@ async function runReport(rpcUrl) {
   let totalHypeEq = null;
   let vsRef = null;
   let vsPct = null;
-  const ref = Number(CONFIG.ui?.hypeReference || 0);
+  const savedRef = loadReference()[OWNER.toLowerCase()];
+  const ref = Number(savedRef != null ? savedRef : (CONFIG.ui?.hypeReference || 0));
   try {
     const kntq = new ethers.Contract(CONFIG.tokens.KNTQ.address, ABI.erc20, provider);
     const [nativeHype, kntqWallet] = await rpcRetry(() => Promise.all([
