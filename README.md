@@ -41,7 +41,7 @@ In the default configuration `ui.defaultAddress` is empty, so the page starts in
 ## Quick start / 快速开始
 
 ```bash
-git clone https://github.com/Ssw7777/elysium-lp.git
+git clone https://github.com/Ssw7777/26-11-9-elysium-lp.git
 cd elysium-lp
 python3 server.py --no-open --port 8097
 # open http://127.0.0.1:8097/elysium-lp/
