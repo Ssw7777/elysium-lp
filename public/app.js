@@ -42,6 +42,10 @@
     pm: new ethers.Interface(ABI.positionManager),
     permit2: new ethers.Interface(ABI.permit2)
   };
+  const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
+  const multicallIface = new ethers.Interface([
+    'function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)'
+  ]);
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
   const SWAP_TOPIC = ethers.id('Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)');
@@ -523,6 +527,19 @@
 
   async function batchCalls(calls) {
     if (!calls.length) return [];
+    const canAggregate = calls.length > 1 && calls.every((c) => (!c.block || c.block === 'latest') && !c.from && !c.value);
+    if (canAggregate) {
+      try {
+        const aggregate = calls.map((c) => ({ target: c.to, allowFailure: true, callData: c.data }));
+        const raw = await ethCall(MULTICALL3, multicallIface.encodeFunctionData('aggregate3', [aggregate]));
+        const [results] = multicallIface.decodeFunctionResult('aggregate3', raw);
+        return results.map((row, i) => row.success
+          ? { result: row.returnData }
+          : { error: { code: 3, message: 'multicall subcall failed', data: row.returnData } });
+      } catch (error) {
+        console.warn('[multicall] fallback', decodeErr(error));
+      }
+    }
     const reqs = calls.map((c) => ({
       method: 'eth_call',
       params: [Object.assign({ to: c.to, data: c.data }, c.from ? { from: c.from } : {}, c.value ? { value: toHexQty(c.value) } : {}), c.block || 'latest']
