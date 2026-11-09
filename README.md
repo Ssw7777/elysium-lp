@@ -46,7 +46,7 @@ Edit `config.json`:
 - `network.rpcUrls`: official Elysium RPC.
 - `uniswap.*`: public pool, PoolManager, StateView and PositionManager addresses.
 - `ui.defaultAddress`: leave empty to connect a wallet; set an address for read-only viewing.
-- `ui.hypeReference`: optional HYPE amount used only as a reference line in the HYPE strip. Use `0` to hide the reference.
+- `ui.hypeReference`: optional HYPE amount used only as a reference line in the HYPE strip. Use `0` to hide the reference; it can also be edited and saved in the browser without changing config.
 - `ui.hyperEvmRpc`: HyperEVM RPC used for the HYPE wallet balance.
 - `safety.*`: stale thresholds and display limits.
 

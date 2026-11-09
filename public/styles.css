@@ -584,3 +584,18 @@ body { font-size: 17px; line-height: 1.5; font-weight: 500; }
 #authState.gain { color: var(--green); }
 #authState.loss { color: var(--red); }
 #reauthBtn { margin-left: 0; color: var(--accent); }
+/* Position card status colors and compact footer */
+.position-card.in-range { background: #f3fbf6; border-color: #cfe8da; }
+.position-card.near-range { background: #fff9e8; border-color: #ecd9a5; }
+.position-card.out-of-range { background: #fff4f2; border-color: #f0c9c3; }
+.position-card.empty { background: #fafaf8; }
+.pos-range { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; color: #5d5c55; font-size: 11.5px; font-weight: 600; line-height: 1.45; }
+.pos-range-line:first-child { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.pos-footer { justify-content: flex-start; gap: 10px; }
+.pos-actions { flex: 0 0 auto; }
+.pos-detail { margin-left: 2px; font-size: 11.5px; color: var(--muted); }
+.pos-detail b { color: var(--text); font-size: 12px; }
+.hype-ref-edit { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10.5px; }
+.hype-ref-edit input { width: 64px; border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 5px; font-family: var(--mono); font-size: 11px; }
+.hype-ref-edit button { border: 1px solid var(--line-strong); background: #fff; border-radius: 6px; padding: 3px 6px; color: var(--accent); font-size: 10px; font-weight: 650; cursor: pointer; }
+@media (max-width: 900px) { .pos-footer { flex-wrap: wrap; } .pos-detail { white-space: normal; } }

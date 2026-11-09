@@ -30,7 +30,7 @@
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
     'rangeUpper', 'rangeUpperUsd', 'customRange', 'customLower', 'customUpper', 'slippageInput', 'slippageHint',
     'quoteState', 'quoteBudget', 'quoteHype', 'quoteKntq', 'quoteRatio', 'quoteRange', 'quoteFee', 'quoteSlip', 'quoteMin', 'quoteNote',
-    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'authState', 'reauthBtn', 'refreshBalBtn', 'sliderLower', 'sliderCurrent', 'sliderUpper', 'rangeMin', 'rangeMax', 'rangeSliderFill', 'rangeSliderCurrent', 'rangeZoomIn', 'rangeZoomOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
+    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'authState', 'reauthBtn', 'refreshBalBtn', 'hypeRefInput', 'hypeRefSave', 'sliderLower', 'sliderCurrent', 'sliderUpper', 'rangeMin', 'rangeMax', 'rangeSliderFill', 'rangeSliderCurrent', 'rangeZoomIn', 'rangeZoomOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
     'modalBody', 'modalClose', 'modalCancel', 'modalConfirm', 'toastStack',
     'chartTabs', 'chartInvert', 'priceChart', 'chartEmpty', 'chartLast', 'chartStats',
     'liquidityBars', 'distributionTag', 'distCurrentPrice', 'distAltPrice', 'distStatPrice', 'distHypePrice',
@@ -82,6 +82,7 @@
     positionIds: loadJson(STORAGE_PREFIX + 'position-ids', {}),
     entryCache: loadJson(STORAGE_PREFIX + 'entry-cache', {}),
     claims: {},
+    hypeReference: 0,
     forceLogs: false,
     modal: { onConfirm: null, busy: false }
   };
@@ -238,7 +239,10 @@
       state.compose.slippagePct = Number(ui.slippageInput.value);
     }
     ui.hideClosed.checked = state.hideClosed;
-    if (ui.hypeRefBadge) { const ref = Number(config.ui?.hypeReference || 0); ui.hypeRefBadge.textContent = ref > 0 ? '参考 ' + fmtNum(ref, 2) : 'HYPE 本位'; }
+    const savedRef = readStorage('hype-reference');
+    state.hypeReference = savedRef != null ? Number(savedRef) : Number(config.ui?.hypeReference || 0);
+    if (!Number.isFinite(state.hypeReference) || state.hypeReference < 0) state.hypeReference = 0;
+    if (ui.hypeRefInput) ui.hypeRefInput.value = state.hypeReference > 0 ? String(state.hypeReference) : '';
     ui.sortSelect.value = state.sort;
     const watchAddress = config.ui?.defaultAddress;
     if (watchAddress) {
@@ -704,7 +708,7 @@
 
   function updateHypeUi() {
     if (!ui.hypeEly) return;
-    const ref = Number(state.config?.ui?.hypeReference || 0);
+    const ref = Number(state.hypeReference || 0);
     if (ui.hypeRefBadge) ui.hypeRefBadge.textContent = ref > 0 ? '参考 ' + fmtNum(ref, 2) : '实时';
     const active = state.positions.filter((p) => !p.closed);
     const lpUsd = active.reduce((sum, p) => sum + (p.principalUsd || 0) + (p.feesUsd || 0), 0);
@@ -1043,6 +1047,40 @@
 
   function appendPointForPositions(positions) {
     for (const p of positions) appendPoint(p.tokenId, p.fees0, p.fees1);
+  }
+
+  function repricePositions() {
+    const h = state.market?.price;
+    const k = kntqUsd();
+    if (!(h > 0) || !(k > 0)) return;
+    for (const p of state.positions) {
+      const hAmt = Number(ethers.formatUnits(p.amount0 || 0n, 18));
+      const kAmt = Number(ethers.formatUnits(p.amount1 || 0n, 18));
+      p.principalUsd = hAmt * h + kAmt * k;
+      const feeHype = Number(ethers.formatUnits(p.fees0 || 0n, 18));
+      const feeKntq = Number(ethers.formatUnits(p.fees1 || 0n, 18));
+      p.feesUsd = feeHype * h + feeKntq * k;
+      if (p.entry && p.entry.valueUsd > 0) {
+        p.currentValueUsd = p.principalUsd + p.feesUsd + (p.claimedUsd || 0);
+        p.pnlUsd = p.currentValueUsd - p.entry.valueUsd;
+        p.pnlPct = p.pnlUsd / p.entry.valueUsd * 100;
+      }
+    }
+  }
+
+  async function fastPriceRefresh() {
+    if (document.hidden || state.refreshing || !state.config || !state.pool) return;
+    try {
+      const pool = await readPool();
+      state.pool = pool;
+      await loadMarket();
+      repricePositions();
+      updateMarketUi();
+      renderPositions();
+      updateSummary();
+      updateHypeUi();
+      if (state.compose.preset === 'custom') { try { updateRangeUi(selectedRange()); } catch (_) { /* noop */ } }
+    } catch (_) { /* next interval */ }
   }
 
   async function refreshAll() {
@@ -1498,9 +1536,18 @@
       if (p.ageSec != null && p.ageSec < seconds) return '建仓中';
       return '—';
     };
+    const priceUsd = state.market?.price;
+    const lowerUsd = priceUsd && rangeLower > 0 ? rangeLower * priceUsd : null;
+    const upperUsd = priceUsd && rangeUpper > 0 ? rangeUpper * priceUsd : null;
+    const distDown = k != null && lowerUsd ? (k / lowerUsd - 1) * 100 : null;
+    const distUp = k != null && upperUsd ? (upperUsd / k - 1) * 100 : null;
+    const nearRange = p.inRange && distDown != null && distUp != null && Math.min(distDown, distUp) < 3;
+    const rangeClass = p.closed ? 'empty' : p.inRange ? (nearRange ? 'near-range' : 'in-range') : 'out-of-range';
+    const statusClass2 = p.closed ? 'gray' : p.inRange ? (nearRange ? 'amber' : 'green') : 'amber';
+    const status2 = p.closed ? '已撤空仓' : p.inRange ? (nearRange ? '接近边界' : '在区间') : (state.pool.tick < p.tickLower ? '低于区间' : '高于区间');
     return '' +
-      '<article class="position-card ' + (p.closed ? 'empty' : p.inRange ? 'in-range' : 'out-of-range') + '" data-token-id="' + p.tokenId + '">' +
-        '<div class="pos-head"><div class="pos-id"><strong>#' + p.tokenId + '</strong><span class="pair">KNTQ / HYPE</span></div><span class="badge ' + statusClass + '">' + status + '</span></div>' +
+      '<article class="position-card ' + rangeClass + '" data-token-id="' + p.tokenId + '">' +
+        '<div class="pos-head"><div class="pos-id"><strong>#' + p.tokenId + '</strong><span class="pair">KNTQ / HYPE</span></div><span class="badge ' + statusClass2 + '">' + status2 + '</span></div>' +
         '<div class="pos-pnl">' +
           '<span>投入 ' + (p.entryValueUsd == null ? '—' : (p.entry?.estimated ? '≈' : '') + fmtUsd(p.entryValueUsd)) + '</span>' +
           '<span>当前总价值 ' + (p.currentValueUsd == null ? '—' : fmtUsd(p.currentValueUsd, { digits: 2 })) + '</span>' +
@@ -1517,7 +1564,7 @@
           '<div class="metric"><div class="metric-label"><span>本金 · 当前估值</span><span>' + (p.inRange ? 'IN RANGE' : 'OUT') + '</span></div>' +
             '<strong class="metric-value">' + (p.principalUsd == null ? '$—' : fmtUsd(p.principalUsd)) + '</strong>' +
             '<span class="metric-sub">' + fmtToken(p.amount0, 18, 6) + ' HYPE + ' + fmtToken(p.amount1, 18, 5) + ' KNTQ</span>' +
-            '<div class="pos-range">区间 ' + (state.market?.price ? fmtUsd(rangeLower * state.market.price, { digits: 4 }) + ' – ' + fmtUsd(rangeUpper * state.market.price, { digits: 4 }) : '—') + ' KNTQ/USDT' + (k != null && rangeLower > 0 && rangeUpper > 0 ? ' · 距下轨 ' + fmtNum((k / (rangeLower * state.market.price) - 1) * 100, 1) + '% / 距上轨 ' + fmtNum((rangeUpper * state.market.price / k - 1) * 100, 1) + '%' : '') + '</div>' +
+            '<div class="pos-range"><div class="pos-range-line">区间 ' + (lowerUsd == null ? '—' : fmtUsd(lowerUsd, { digits: 4 }) + ' – ' + fmtUsd(upperUsd, { digits: 4 })) + ' KNTQ/USDT</div>' + '<div class="pos-range-line">距下轨 ' + (distDown == null ? '—' : fmtNum(distDown, 1) + '%') + ' / 距上轨 ' + (distUp == null ? '—' : fmtNum(distUp, 1) + '%') + '</div></div>' +
           '</div>' +
           '<div class="metric"><div class="metric-label"><span>待领收益</span><span class="sync">链上 fee growth</span></div>' +
             '<strong class="metric-value ' + (p.feesUsd > 0 ? 'positive' : 'muted') + '">' + (p.feesUsd == null ? '$—' : fmtUsd(p.feesUsd)) + '</strong>' +
@@ -2368,6 +2415,14 @@
     if (ui.emptyComposeBtn) ui.emptyComposeBtn.addEventListener('click', () => { const node = ui.hypeInput || ui.composer; if (node) node.focus(); });
     if (ui.refreshBalBtn) ui.refreshBalBtn.addEventListener('click', async () => { try { await refreshBalances(); scheduleQuote(true); toast('余额已刷新', '已重新读取钱包余额。', 'success'); } catch (error) { toast('余额刷新失败', decodeErr(error), 'error'); } });
     if (ui.reauthBtn) ui.reauthBtn.addEventListener('click', openReauth);
+    if (ui.hypeRefSave) ui.hypeRefSave.addEventListener('click', () => {
+      const value = Number(ui.hypeRefInput?.value || 0);
+      if (!Number.isFinite(value) || value < 0) { toast('参考值无效', '请输入 0 或正数。', 'error'); return; }
+      state.hypeReference = value;
+      writeStorage('hype-reference', String(value));
+      updateHypeUi();
+      toast('参考值已更新', value > 0 ? '参考 ' + fmtNum(value, 2) + ' HYPE' : '已隐藏参考', 'success');
+    });
     if (ui.rangeMin) ui.rangeMin.addEventListener('input', applySliderTicks);
     if (ui.rangeMax) ui.rangeMax.addEventListener('input', applySliderTicks);
     if (ui.rangeZoomIn) ui.rangeZoomIn.addEventListener('click', () => zoomCustomRange(0.75));
@@ -2436,6 +2491,7 @@
     setInterval(tick, 1000);
     setInterval(poll, Number(state.config.ui.pollSeconds || 12) * 1000);
     setInterval(checkPositionBalance, 15000);
+    setInterval(fastPriceRefresh, 20000);
   }
 
   init();
