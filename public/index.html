@@ -119,6 +119,7 @@
       <div class="card-head"><div><h3>添加流动性</h3><small>KNTQ/HYPE · Uniswap V4 · 1% · 自由输入任意一侧</small></div><span class="fee-badge">V4 · 1%</span></div>
       <div class="build-body" id="composer">
         <div class="build-form">
+          <div class="build-wallet"><span>钱包 HYPE <b id="buildHypeBal">—</b></span><span>KNTQ <b id="buildKntqBal">—</b></span><button id="refreshBalBtn" type="button">刷新余额</button></div>
           <div class="build-inputs">
             <label class="build-input"><span>HYPE</span><div><input id="hypeInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxHypeBtn" type="button">MAX</button></div></label>
             <label class="build-input"><span>KNTQ</span><div><input id="kntqInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxKntqBtn" type="button">MAX</button></div></label>
@@ -150,12 +151,6 @@
             <div><span>滑点</span><b id="quoteSlip">0.50%</b></div><div><span>数量上限</span><b id="quoteMin">—</b></div>
           </div>
           <p class="build-note" id="quoteNote">输入任意一侧数量，另一侧按当前区间比例自动计算。</p>
-          <div class="swap-ref">
-            <div class="build-label">Swap 参考 <small>仅计算，不执行</small></div>
-            <div class="swap-ref-row"><button type="button" id="swapRefDir">HYPE → KNTQ</button><input id="swapRefAmount" inputmode="decimal" placeholder="0.0"></div>
-            <div class="swap-ref-out" id="swapRefOut">≈ —</div>
-            <small>按当前池价扣除 1% fee，仅供对照；实际兑换请在钱包/DEX 完成。</small>
-          </div>
         </aside>
       </div>
     </section>
@@ -186,6 +181,6 @@
   <script src="vendor/ethers.umd.min.js"></script>
   <script src="math.js"></script>
   <script src="abi.js"></script>
-  <script src="app.js?v=20261110-2500"></script>
+  <script src="app.js?v=20261110-2510"></script>
 </body>
 </html>

@@ -5,6 +5,7 @@
   const M = window.LPMath;
   const ABI = window.LPAbi;
   const ZERO = '0x0000000000000000000000000000000000000000';
+  const HEX_RE = /^0x[0-9a-fA-F]*$/;
   const MSG_SENDER = '0x0000000000000000000000000000000000000001';
   const Q128 = 1n << 128n;
   const MAX_UINT160 = (1n << 160n) - 1n;
@@ -29,7 +30,7 @@
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
     'rangeUpper', 'rangeUpperUsd', 'customRange', 'customLower', 'customUpper', 'slippageInput', 'slippageHint',
     'quoteState', 'quoteBudget', 'quoteHype', 'quoteKntq', 'quoteRatio', 'quoteRange', 'quoteFee', 'quoteSlip', 'quoteMin', 'quoteNote',
-    'composerError', 'previewBtn', 'swapRefDir', 'swapRefAmount', 'swapRefOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
+    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'refreshBalBtn', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
     'modalBody', 'modalClose', 'modalCancel', 'modalConfirm', 'toastStack',
     'chartTabs', 'chartInvert', 'priceChart', 'chartEmpty', 'chartLast', 'chartStats',
     'liquidityBars', 'distributionTag', 'distCurrentPrice', 'distAltPrice', 'distStatPrice', 'distHypePrice',
@@ -65,7 +66,6 @@
     lastReadAt: 0,
     refreshing: false,
     loading: true,
-    swapRefDir: 'hype2kntq',
     compose: {
       hype: '', kntq: '', lastEdited: 'hype', preset: '10', lower: '', upper: '', slippagePct: 0.5,
       quote: null, error: null, quoting: false, seq: 0
@@ -329,6 +329,8 @@
   function updateWalletUi() {
     const connected = !!state.wallet.address;
     if (ui.connectBtn) ui.connectBtn.textContent = connected ? shortAddress(state.wallet.address) : '连接钱包';
+    if (ui.buildHypeBal) ui.buildHypeBal.textContent = connected ? fmtToken(state.balances.hype, 18, 4) + ' HYPE' : '—';
+    if (ui.buildKntqBal) ui.buildKntqBal.textContent = connected ? fmtToken(state.balances.kntq, 18, 5) + ' KNTQ' : '—';
     if (ui.walletAddress) {
       ui.walletAddress.textContent = connected ? shortAddress(state.wallet.address) : '未连接';
       ui.walletAddress.title = connected ? state.wallet.address : '';
@@ -611,12 +613,21 @@
     if (!state.wallet.address) return { hype: 0n, kntq: 0n };
     const owner = state.wallet.address;
     const kntq = getAddress(state.config.tokens.KNTQ.address);
-    const res = await rpcBatchRaw([
-      { method: 'eth_getBalance', params: [owner, 'latest'] },
-      { method: 'eth_call', params: [{ to: kntq, data: callData(iface.erc20, 'balanceOf', [owner]) }, 'latest'] }
+    const [hypeHex, kntqRaw] = await Promise.all([
+      rpcRaw('eth_getBalance', [owner, 'latest']),
+      ethCall(kntq, callData(iface.erc20, 'balanceOf', [owner]))
     ]);
-    for (const item of res) if (item.error) throw Object.assign(new Error(decodeErr(item.error)), item.error);
-    return { hype: BigInt(res[0].result), kntq: iface.erc20.decodeFunctionResult('balanceOf', res[1].result)[0] };
+    if (typeof hypeHex !== 'string' || !HEX_RE.test(hypeHex)) throw new Error('HYPE 余额返回异常');
+    return { hype: BigInt(hypeHex), kntq: iface.erc20.decodeFunctionResult('balanceOf', kntqRaw)[0] };
+  }
+
+  async function refreshBalances() {
+    if (!state.wallet.address) return null;
+    const fresh = await readBalances();
+    state.balances = fresh;
+    updateWalletUi();
+    updateComposeUi();
+    return fresh;
   }
 
   async function readHyperEvmBalance() {
@@ -1243,8 +1254,8 @@
       }
       const amount0Max = amounts.amount0 + amounts.amount0 * BigInt(slip) / 10000n + 2n;
       const amount1Max = amounts.amount1 + amounts.amount1 * BigInt(slip) / 10000n + 2n;
-      if (state.wallet.address && amount0Max + gasReserve > state.balances.hype) throw new Error('HYPE 余额不足（含 gas 预留）');
-      if (state.wallet.address && amount1Max > state.balances.kntq) throw new Error('KNTQ 余额不足；请先到 Ascend Swap 准备，本工具不自动兑换');
+      if (state.wallet.address && amounts.amount0 + gasReserve > state.balances.hype) throw new Error('HYPE 余额不足：本次需要 ' + fmtToken(amounts.amount0 + gasReserve, 18, 5) + '（含 gas 预留），钱包 ' + fmtToken(state.balances.hype, 18, 5) + '。请点“刷新余额”或减少数量。');
+      if (state.wallet.address && amounts.amount1 > state.balances.kntq) throw new Error('KNTQ 余额不足：本次需要 ' + fmtToken(amounts.amount1, 18, 5) + '，钱包 ' + fmtToken(state.balances.kntq, 18, 5) + '。请点“刷新余额”或减少 HYPE 数量。');
       const kUsd = kntqUsd();
       const totalUsd = kUsd == null ? null : Number(ethers.formatUnits(amounts.amount0, 18)) * state.market.price + Number(ethers.formatUnits(amounts.amount1, 18)) * kUsd;
       state.compose.quote = {
@@ -1267,18 +1278,6 @@
   function scheduleQuote(immediate) {
     clearTimeout(quoteTimer);
     quoteTimer = setTimeout(computeQuote, immediate ? 20 : 220);
-  }
-
-  function updateSwapRef() {
-    if (!ui.swapRefAmount || !ui.swapRefOut) return;
-    const amount = parseFloatSafe(ui.swapRefAmount.value);
-    const hypeUsd = state.market?.price;
-    const kUsd = kntqUsd();
-    if (!(amount > 0) || !(hypeUsd > 0) || !(kUsd > 0)) { ui.swapRefOut.textContent = '≈ —'; return; }
-    const hypeToKntq = state.swapRefDir !== 'kntq2hype';
-    const rate = hypeToKntq ? hypeUsd / kUsd : kUsd / hypeUsd;
-    const out = amount * rate * 0.99;
-    ui.swapRefOut.textContent = '≈ ' + fmtNum(out, 4) + (hypeToKntq ? ' KNTQ' : ' HYPE');
   }
 
   function updatePresetUi() {
@@ -1324,7 +1323,6 @@
       if (!error) ui.quoteNote.textContent = '输入任意一侧数量，另一侧按当前区间比例自动计算。';
       if (!state.compose.hype && !state.compose.kntq) { ui.amountUsd.textContent = '≈ $—'; ui.amountRatio.textContent = '—'; }
     }
-    updateSwapRef();
     updateComposerButtons();
   }
 
@@ -1860,7 +1858,7 @@
       steps.push({ id: 'approve-token', label: '授权 KNTQ → Permit2', detail: '仅授权本次上限 ' + fmtToken(quote.amount1Max, 18, 5) + ' KNTQ', to: token, data: callData(iface.erc20, 'approve', [permit2, quote.amount1Max]), value: 0n, kind: 'approve' });
       steps.push({ id: 'approve-permit2', label: 'Permit2 授权 PositionManager', detail: '仅授权本次上限，不无限授权', to: permit2, data: callData(iface.permit2, 'approve', [token, pm, quote.amount1Max, MAX_UINT48]), value: 0n, kind: 'approve' });
     }
-    steps.push({ id: 'mint', label: '创建 Uniswap V4 仓位', detail: fmtToken(quote.amount0, 18, 6) + ' HYPE + ' + fmtToken(quote.amount1, 18, 5) + ' KNTQ · ' + (quote.range.full ? '全范围' : fmtPrice(quote.range.lowerPrice) + '–' + fmtPrice(quote.range.upperPrice)), to: pm, data: buildMintData(quote), value: quote.amount0Max, kind: 'mint' });
+    steps.push({ id: 'mint', label: '创建 Uniswap V4 仓位', detail: fmtToken(quote.amount0, 18, 6) + ' HYPE + ' + fmtToken(quote.amount1, 18, 5) + ' KNTQ · ' + (quote.range.full ? '全范围' : fmtPrice(quote.range.lowerPrice) + '–' + fmtPrice(quote.range.upperPrice)), to: pm, data: buildMintData(quote), value: quote.amount0, kind: 'mint' });
     return steps;
   }
 
@@ -1926,6 +1924,7 @@
     if (state.wallet.chainId !== Number(state.config.network.chainId)) {
       try { await ensureWalletChain(true); await setupProvider(); updateWalletUi(); await refreshAll(); } catch (e) { toast('网络切换失败', decodeErr(e), 'error'); return; }
     }
+    try { await refreshBalances(); } catch (error) { toast('余额读取失败', decodeErr(error), 'error'); }
     await computeQuote();
     const q = state.compose.quote;
     if (!q || state.compose.error) { toast('无法生成预览', state.compose.error || '请检查数量、余额与区间。', 'error'); return; }
@@ -2213,14 +2212,7 @@
     if (ui.slippageInput) ui.slippageInput.addEventListener('input', () => { state.compose.slippagePct = parseFloatSafe(ui.slippageInput.value); updateComposeUi(); scheduleQuote(); });
     if (ui.previewBtn) ui.previewBtn.addEventListener('click', () => { previewBuild().catch((error) => toast('预览失败', decodeErr(error), 'error')); });
     if (ui.emptyComposeBtn) ui.emptyComposeBtn.addEventListener('click', () => { const node = ui.hypeInput || ui.composer; if (node) node.focus(); });
-    if (ui.swapRefDir) {
-      ui.swapRefDir.addEventListener('click', () => {
-        state.swapRefDir = state.swapRefDir === 'kntq2hype' ? 'hype2kntq' : 'kntq2hype';
-        ui.swapRefDir.textContent = state.swapRefDir === 'kntq2hype' ? 'KNTQ → HYPE' : 'HYPE → KNTQ';
-        updateSwapRef();
-      });
-    }
-    if (ui.swapRefAmount) ui.swapRefAmount.addEventListener('input', updateSwapRef);
+    if (ui.refreshBalBtn) ui.refreshBalBtn.addEventListener('click', async () => { try { await refreshBalances(); scheduleQuote(true); toast('余额已刷新', '已重新读取钱包余额。', 'success'); } catch (error) { toast('余额刷新失败', decodeErr(error), 'error'); } });
     ui.positionsGrid.addEventListener('click', (event) => {
       const btn = event.target.closest('button[data-action]');
       if (!btn) return;
