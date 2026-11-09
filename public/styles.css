@@ -580,3 +580,7 @@ body { font-size: 17px; line-height: 1.5; font-weight: 500; }
 .range-slider-actions small { margin-left: auto; color: var(--muted-2); font-size: 10px; }
 .pill.chart-link { text-decoration: none; color: var(--accent); border-color: #d6e4ef; background: #f4f9fd; }
 .pill.chart-link:hover { background: #e9f3fb; }
+#authState { color: var(--muted); font-size: 11px; }
+#authState.gain { color: var(--green); }
+#authState.loss { color: var(--red); }
+#reauthBtn { margin-left: 0; color: var(--accent); }

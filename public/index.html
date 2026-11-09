@@ -120,7 +120,7 @@
       <div class="card-head"><div><h3>添加流动性</h3><small>KNTQ/HYPE · Uniswap V4 · 1% · 自由输入任意一侧</small></div><span class="fee-badge">V4 · 1%</span></div>
       <div class="build-body" id="composer">
         <div class="build-form">
-          <div class="build-wallet"><span>钱包 HYPE <b id="buildHypeBal">—</b></span><span>KNTQ <b id="buildKntqBal">—</b></span><button id="refreshBalBtn" type="button">刷新余额</button></div>
+          <div class="build-wallet"><span>钱包 HYPE <b id="buildHypeBal">—</b></span><span>KNTQ <b id="buildKntqBal">—</b></span><span id="authState">授权：—</span><button id="reauthBtn" type="button" hidden>重新授权</button><button id="refreshBalBtn" type="button">刷新余额</button></div>
           <div class="build-inputs">
             <label class="build-input"><span>HYPE</span><div><input id="hypeInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxHypeBtn" type="button">MAX</button></div></label>
             <label class="build-input"><span>KNTQ</span><div><input id="kntqInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxKntqBtn" type="button">MAX</button></div></label>
@@ -190,6 +190,6 @@
   <script src="vendor/ethers.umd.min.js"></script>
   <script src="math.js"></script>
   <script src="abi.js"></script>
-  <script src="app.js?v=20261110-2545"></script>
+  <script src="app.js?v=20261110-2555"></script>
 </body>
 </html>

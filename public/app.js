@@ -30,7 +30,7 @@
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
     'rangeUpper', 'rangeUpperUsd', 'customRange', 'customLower', 'customUpper', 'slippageInput', 'slippageHint',
     'quoteState', 'quoteBudget', 'quoteHype', 'quoteKntq', 'quoteRatio', 'quoteRange', 'quoteFee', 'quoteSlip', 'quoteMin', 'quoteNote',
-    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'refreshBalBtn', 'sliderLower', 'sliderCurrent', 'sliderUpper', 'rangeMin', 'rangeMax', 'rangeSliderFill', 'rangeSliderCurrent', 'rangeZoomIn', 'rangeZoomOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
+    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'authState', 'reauthBtn', 'refreshBalBtn', 'sliderLower', 'sliderCurrent', 'sliderUpper', 'rangeMin', 'rangeMax', 'rangeSliderFill', 'rangeSliderCurrent', 'rangeZoomIn', 'rangeZoomOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
     'modalBody', 'modalClose', 'modalCancel', 'modalConfirm', 'toastStack',
     'chartTabs', 'chartInvert', 'priceChart', 'chartEmpty', 'chartLast', 'chartStats',
     'liquidityBars', 'distributionTag', 'distCurrentPrice', 'distAltPrice', 'distStatPrice', 'distHypePrice',
@@ -154,7 +154,9 @@
       try { return '合约 Panic(' + ethers.AbiCoder.defaultAbiCoder().decode(['uint256'], '0x' + raw.slice(10))[0] + ')'; } catch (_) { /* noop */ }
     }
     if (raw === '0x3b99b53d') return 'Uniswap V4 参数编码越界（SliceOutOfBounds），已停止';
-    if (typeof raw === 'string' && raw.startsWith('0x12816f22')) return '撤池最低数量未满足（MinimumAmountInsufficient）。价格在读取后发生了变化，请刷新后重试；保护滑点为 2%，不会自动放宽。';
+    if (typeof raw === 'string' && raw.startsWith('0x12816f22')) return '最低数量未满足（MinimumAmountInsufficient）。价格在读取后发生了变化，请刷新后重试。';
+    if (typeof raw === 'string' && raw.startsWith('0x31e30ad0')) return '数量上限被超过（MaximumAmountExceeded）。价格在签名前发生了变化，请刷新后重试或提高滑点。';
+    if (typeof raw === 'string' && raw.startsWith('0x5212cba1')) return '结算未完成（CurrencyNotSettled）。请检查 KNTQ 授权/余额后重试。';
     return message.length > 260 ? message.slice(0, 260) + '…' : message;
   }
 
@@ -628,7 +630,58 @@
     state.balances = fresh;
     updateWalletUi();
     updateComposeUi();
+    updateAuthState();
     return fresh;
+  }
+
+  async function updateAuthState() {
+    if (!ui.authState) return;
+    if (!state.wallet.address) {
+      ui.authState.textContent = '授权：—';
+      if (ui.reauthBtn) ui.reauthBtn.hidden = true;
+      return;
+    }
+    try {
+      const a = await readAllowances(0n);
+      const need = state.balances.kntq;
+      const tokenOk = a.tokenToPermit2 >= need;
+      const permitOk = a.permitAmount >= need;
+      ui.authState.textContent = '授权：' + (tokenOk && permitOk ? '已就绪' : (!tokenOk ? '需授权 KNTQ→Permit2' : '需授权 Permit2'));
+      ui.authState.className = tokenOk && permitOk ? 'gain' : 'loss';
+      if (ui.reauthBtn) ui.reauthBtn.hidden = false;
+    } catch (_) {
+      ui.authState.textContent = '授权：读取失败';
+      ui.authState.className = 'loss';
+      if (ui.reauthBtn) ui.reauthBtn.hidden = false;
+    }
+  }
+
+  function openReauth() {
+    if (!state.wallet.address) { toast('请先连接钱包', '连接后才能授权。', 'error'); return; }
+    if (!(state.balances.kntq > 0n)) { toast('KNTQ 余额为 0', '没有可授权的 KNTQ。', 'error'); return; }
+    const token = getAddress(state.config.tokens.KNTQ.address);
+    const permit2 = getAddress(state.config.uniswap.permit2);
+    const pm = getAddress(state.config.uniswap.positionManager);
+    const amount = state.balances.kntq;
+    const steps = [
+      { id: 'reauth-token', label: '授权 KNTQ → Permit2', detail: '授权当前余额 ' + fmtToken(amount, 18, 5) + ' KNTQ', to: token, data: callData(iface.erc20, 'approve', [permit2, amount]), value: 0n, kind: 'approve' },
+      { id: 'reauth-permit2', label: '授权 Permit2 → PositionManager', detail: '有效期最大，仅限这个 PositionManager', to: permit2, data: callData(iface.permit2, 'approve', [token, pm, amount, MAX_UINT48]), value: 0n, kind: 'approve' }
+    ];
+    openModal({
+      eyebrow: 'PERMIT2', title: '重新授权 KNTQ',
+      body: '<div class="warning-box">这是显式重新授权，不会发交易建仓。授权额度为当前 KNTQ 余额，授权对象仅限 Uniswap V4 PositionManager。</div><div class="preview-section"><h4>执行步骤</h4><div class="preview-list">' + steps.map(planStepHtml).join('') + '</div></div>',
+      confirmText: '模拟并授权',
+      onConfirm: async () => {
+        await executeSteps(steps, (step, i, phase) => {
+          if (phase === 'simulating') setStepState(step.id, '模拟中…', 'pending');
+          if (phase === 'signing') setStepState(step.id, '模拟通过 · 请在钱包确认', 'pending');
+          if (phase === 'sent') setStepState(step.id, '已发送，等待确认', 'pending');
+          if (phase === 'confirmed') setStepState(step.id, '已确认', '');
+        });
+        toast('授权完成', 'KNTQ / Permit2 授权已更新。', 'success');
+        closeModal(true); await updateAuthState(); await refreshAll();
+      }
+    });
   }
 
   async function readHyperEvmBalance() {
@@ -1005,6 +1058,7 @@
       let hidden = 0;
       if (state.wallet.address && state.wallet.chainId === Number(state.config.network.chainId)) {
         try { balances = await readBalances(); } catch (error) { console.warn('[balances]', decodeErr(error)); balances = state.balances; }
+        updateAuthState();
         const claimsPromise = loadClaims();
         const result = await readPositions(block);
         positions = result.positions;
@@ -2311,6 +2365,7 @@
     if (ui.previewBtn) ui.previewBtn.addEventListener('click', () => { previewBuild().catch((error) => toast('预览失败', decodeErr(error), 'error')); });
     if (ui.emptyComposeBtn) ui.emptyComposeBtn.addEventListener('click', () => { const node = ui.hypeInput || ui.composer; if (node) node.focus(); });
     if (ui.refreshBalBtn) ui.refreshBalBtn.addEventListener('click', async () => { try { await refreshBalances(); scheduleQuote(true); toast('余额已刷新', '已重新读取钱包余额。', 'success'); } catch (error) { toast('余额刷新失败', decodeErr(error), 'error'); } });
+    if (ui.reauthBtn) ui.reauthBtn.addEventListener('click', openReauth);
     if (ui.rangeMin) ui.rangeMin.addEventListener('input', applySliderTicks);
     if (ui.rangeMax) ui.rangeMax.addEventListener('input', applySliderTicks);
     if (ui.rangeZoomIn) ui.rangeZoomIn.addEventListener('click', () => zoomCustomRange(0.75));
