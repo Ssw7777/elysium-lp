@@ -27,7 +27,7 @@ The server never asks for a mnemonic or private key and never broadcasts a trans
 ## Quick start
 
 ```bash
-git clone https://github.com/Ssw7777/26-11-9-elysium-lp.git
+git clone https://github.com/Ssw7777/elysium-lp-26-11-9.git
 cd elysium-lp
 python3 server.py --no-open --port 8097
 # open http://127.0.0.1:8097/elysium-lp/

@@ -27,7 +27,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/Ssw7777/26-11-9-elysium-lp.git
+git clone https://github.com/Ssw7777/elysium-lp-26-11-9.git
 cd elysium-lp
 python3 server.py --no-open --port 8097
 # 打开 http://127.0.0.1:8097/elysium-lp/
