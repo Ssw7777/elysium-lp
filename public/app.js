@@ -24,7 +24,7 @@
     'sumPrincipal', 'sumPrincipalTokens', 'sumFees', 'sumFeesTokens', 'sumApr', 'sumPositions', 'sumEmpty',
     'hourApr', 'dayYield', 'shortApr', 'totalEntry', 'totalCurrent', 'totalPnl', 'totalPnlPct',
     'hypeEly', 'hypeLp', 'hypeHyper', 'hypeTotal', 'hypeMeta', 'hypeRefBadge',
-    'sortSelect', 'hideClosed', 'positionsGrid', 'rangeNotice', 'positionsEmpty', 'emptyComposeBtn', 'composer',
+    'sortSelect', 'hideClosed', 'positionsGrid', 'rangeNotice', 'positionsEmpty', 'emptyComposeBtn', 'emptyBurnBtn', 'composer',
     'hypeInput', 'kntqInput', 'maxHypeBtn', 'maxKntqBtn', 'amountUsd', 'amountRatio',
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
     'rangeUpper', 'rangeUpperUsd', 'customRange', 'customLower', 'customUpper', 'slippageInput', 'slippageHint',
@@ -1315,14 +1315,17 @@
       ui.positionsEmpty.hidden = false;
       if (state.hiddenEmpty > 0 && state.hideClosed) {
         ui.positionsEmpty.querySelector('h4').textContent = '已撤空仓已隐藏';
-        ui.positionsEmpty.querySelector('p').textContent = '当前地址有 ' + state.hiddenEmpty + ' 个空 NFT（Ascend 仍会显示）。关闭“隐藏空仓”后可逐个销毁 NFT；销毁后 Ascend 不再列出。';
+        ui.positionsEmpty.querySelector('p').textContent = '当前地址有 ' + state.hiddenEmpty + ' 个空 NFT（Ascend 仍会显示）。可以直接销毁，销毁后 Ascend 不再列出。';
+        if (ui.emptyBurnBtn) { ui.emptyBurnBtn.hidden = false; ui.emptyBurnBtn.textContent = '销毁 ' + state.hiddenEmpty + ' 个空 NFT'; }
       } else {
+        if (ui.emptyBurnBtn) ui.emptyBurnBtn.hidden = true;
         ui.positionsEmpty.querySelector('h4').textContent = '还没有 KNTQ/HYPE 仓位';
         ui.positionsEmpty.querySelector('p').textContent = state.wallet.address ? '右侧输入 HYPE 和 KNTQ 数量，先预览再创建仓位。' : '连接钱包后，这里会显示真实 V4 NFT 仓位、可领取手续费与近期实测年化。';
       }
       return;
     }
     ui.positionsEmpty.hidden = true;
+    if (ui.emptyBurnBtn) ui.emptyBurnBtn.hidden = true;
     const groups = new Map();
     for (const p of visible.filter((x) => !x.closed)) {
       const key = p.tickLower + ':' + p.tickUpper;
@@ -1367,10 +1370,13 @@
     ui.sumEmpty.textContent = state.hiddenEmpty + ' 个已撤空仓 · 默认' + (state.hideClosed ? '隐藏' : '显示');
     const withEntry = active.filter((p) => p.entryValueUsd != null);
     const totalEntry = withEntry.reduce((sum, p) => sum + p.entryValueUsd, 0);
-    const totalCurrent = active.reduce((sum, p) => sum + (p.currentValueUsd || p.principalUsd || 0), 0);
-    const totalPnl = withEntry.length ? withEntry.reduce((sum, p) => sum + (p.pnlUsd || 0), 0) : null;
+    const claimedTotal = Object.values(state.claims || {}).reduce((sum, row) => sum + Number(row.usd || 0), 0);
+    const claimedInActive = active.reduce((sum, p) => sum + (p.claimedUsd || 0), 0);
+    const unallocatedClaimed = Math.max(0, claimedTotal - claimedInActive);
+    const totalCurrent = active.reduce((sum, p) => sum + (p.currentValueUsd || p.principalUsd || 0), 0) + unallocatedClaimed;
+    const totalPnl = withEntry.length ? withEntry.reduce((sum, p) => sum + (p.pnlUsd || 0), 0) + unallocatedClaimed : (unallocatedClaimed > 0 ? unallocatedClaimed : null);
     ui.totalEntry.textContent = withEntry.length ? fmtUsd(totalEntry) : '$—';
-    ui.totalCurrent.textContent = active.length ? fmtUsd(totalCurrent) : '$—';
+    ui.totalCurrent.textContent = active.length || unallocatedClaimed > 0 ? fmtUsd(totalCurrent) : '$—';
     ui.totalPnl.textContent = totalPnl == null ? '—' : fmtSignedUsd(totalPnl);
     ui.totalPnl.className = totalPnl == null ? '' : totalPnl >= 0 ? 'gain' : 'loss';
     ui.totalPnlPct.textContent = totalPnl == null || !(totalEntry > 0) ? '含待领/已领 · 未实现' : (totalPnl >= 0 ? '+' : '') + fmtNum(totalPnl / totalEntry * 100, 2) + '% · 含待领/已领';
@@ -1693,6 +1699,43 @@
     return iface.pm.encodeFunctionData('modifyLiquidities', [unlock, deadline]);
   }
 
+  function buildBurnManyData(positions) {
+    const cfg = state.config;
+    const actions = [];
+    const params = [];
+    for (const p of positions) {
+      actions.push(3, 17);
+      params.push(coder.encode(['uint256', 'uint128', 'uint128', 'bytes'], [p.tokenId, 0n, 0n, '0x']));
+      params.push(coder.encode(['address', 'address', 'address'], [cfg.uniswap.poolKey.currency0, cfg.uniswap.poolKey.currency1, state.wallet.address]));
+    }
+    const unlock = encodeActionsParams(actions, params);
+    return iface.pm.encodeFunctionData('modifyLiquidities', [unlock, nowSec() + 600]);
+  }
+
+  function openBurnAllEmpty() {
+    const closed = state.positions.filter((p) => p.closed && p.liquidity === 0n);
+    if (!closed.length) { toast('没有可销毁的空 NFT', '当前没有空仓。'); return; }
+    if (txBlocked()) { toast('数据过期', '刷新后再销毁。', 'error'); return; }
+    const data = buildBurnManyData(closed);
+    const step = { id: 'burn-all', label: '销毁空 NFT × ' + closed.length, detail: closed.map((p) => '#' + p.tokenId).join('、'), to: getAddress(state.config.uniswap.positionManager), data, value: 0n };
+    openModal({
+      eyebrow: 'BURN EMPTY NFTS', title: '销毁 ' + closed.length + ' 个空仓 NFT',
+      body: '<div class="warning-box">这些 NFT 已经没有流动性，但 Ascend 仍会把它们列出来。BURN_POSITION 会销毁全部 NFT，之后 Ascend 不再显示。</div><div class="preview-section"><h4>执行步骤</h4><div class="preview-list">' + planStepHtml(step, 0) + '</div></div>',
+      confirmText: '模拟并销毁 ' + closed.length + ' 个',
+      onConfirm: async () => {
+        await executeSteps([step], (s, i, phase) => {
+          if (phase === 'simulating') setStepState('burn-all', '模拟中…', 'pending');
+          if (phase === 'signing') setStepState('burn-all', '模拟通过 · 请在钱包确认', 'pending');
+          if (phase === 'sent') setStepState('burn-all', '已发送，等待确认', 'pending');
+          if (phase === 'confirmed') setStepState('burn-all', '已确认', '');
+        });
+        for (const p of closed) await clearClaim(p.tokenId);
+        toast('空 NFT 已销毁', 'Ascend 不会再列出这些仓位。', 'success');
+        closeModal(true); await refreshAll();
+      }
+    });
+  }
+
   function buildMintSteps(quote) {
     const cfg = state.config;
     const token = getAddress(cfg.tokens.KNTQ.address);
@@ -2005,6 +2048,7 @@
     }
     ui.rpcBadge.addEventListener('click', openStatusModal);
     ui.refreshBtn.addEventListener('click', async () => { state.forceLogs = true; await poll(); toast('已刷新', '链上快照与行情已更新。'); });
+    if (ui.emptyBurnBtn) ui.emptyBurnBtn.addEventListener('click', openBurnAllEmpty);
     ui.staleRefreshBtn.addEventListener('click', async () => { await poll(); });
     ui.sortSelect.addEventListener('change', () => { state.sort = ui.sortSelect.value; writeStorage('sort', state.sort); renderPositions(); });
     ui.hideClosed.addEventListener('change', () => { state.hideClosed = ui.hideClosed.checked; writeStorage('hide-closed', state.hideClosed ? '1' : '0'); renderPositions(); });

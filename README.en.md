@@ -13,7 +13,7 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. Chain 
 - Optional browser-wallet mode for claiming fees and withdrawing liquidity. OKX Wallet's built-in Elysium network is supported; the app does not create a custom network on OKX.
 - A 15-second PositionManager `balanceOf` watcher detects new positions, then re-reads logs.
 - Optional periodic Bark report with pending fees, net PnL, claimed fees, range distance, HYPE total and timestamp.
-- Two Elysium RPC endpoints with failover.
+- Official Elysium RPC only; no third-party RPC fallback.
 
 ## Read-only and signing
 
@@ -36,7 +36,7 @@ No third-party Python packages are required. The ethers.js browser bundle is ven
 
 Edit `config.json`:
 
-- `network.rpcUrls`: official Elysium RPC first, fallback second.
+- `network.rpcUrls`: official Elysium RPC.
 - `uniswap.*`: public pool, PoolManager, StateView and PositionManager addresses.
 - `ui.defaultAddress`: leave empty to connect a wallet; set an address for read-only viewing.
 - `ui.hypeReference`: optional HYPE amount used only as a reference in the HYPE strip. Use `0` to hide it.

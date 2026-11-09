@@ -13,7 +13,7 @@
 - 可选浏览器钱包模式：领取手续费 / 撤池；支持 OKX 内置 Elysium 网络，不在 OKX 里自动新增自定义网络。
 - 每 15 秒检查 PositionManager `balanceOf`，发现新仓位后立即重新读取日志。
 - 可选 Bark 定时报告：待领手续费、净 PnL、已领手续费、区间距离、HYPE 合计和时间。
-- 两个 Elysium RPC，自动故障切换。
+- 只使用 Elysium 官方 RPC，不配置第三方备用 RPC。
 
 ## 只读与签名
 
@@ -36,7 +36,7 @@ python3 server.py --no-open --port 8097
 
 编辑 `config.json`：
 
-- `network.rpcUrls`：Elysium 官方 RPC 优先，备用第二。
+- `network.rpcUrls`：只填 Elysium 官方 RPC。
 - `uniswap.*`：公开的 V4 池、PoolManager、StateView、PositionManager 地址。
 - `ui.defaultAddress`：留空则连接钱包；填地址则只读查看。
 - `ui.hypeReference`：仅作为 HYPE 小窗口的参考数量；填 `0` 隐藏参考。

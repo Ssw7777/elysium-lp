@@ -10,10 +10,6 @@
       {
         "name": "Kinetiq Official",
         "url": "https://rpc.elysium.kinetiq.xyz"
-      },
-      {
-        "name": "Elyscan",
-        "url": "https://rpc.elyscan.live"
       }
     ]
   },
