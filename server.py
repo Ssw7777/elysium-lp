@@ -652,7 +652,7 @@ class LocalHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "startedAt": self.server.state.started_at})
             return
         if path in ("/favicon.ico",):
-            self._send_file(PUBLIC_ROOT / "favicon.svg")
+            self._send_file(PUBLIC_ROOT / "0xstudy-icon.png")
             return
         self._serve_static(path)
 
