@@ -1347,7 +1347,7 @@
       }
       const amount0Max = amounts.amount0 + amounts.amount0 * BigInt(slip) / 10000n + 2n;
       const amount1Max = amounts.amount1 + amounts.amount1 * BigInt(slip) / 10000n + 2n;
-      if (state.wallet.address && amounts.amount0 + gasReserve > state.balances.hype) throw new Error('HYPE 余额不足：本次需要 ' + fmtToken(amounts.amount0 + gasReserve, 18, 5) + '（含 gas 预留），钱包 ' + fmtToken(state.balances.hype, 18, 5) + '。请点“刷新余额”或减少数量。');
+      if (state.wallet.address && amount0Max + gasReserve > state.balances.hype) throw new Error('HYPE 余额不足：本次最多需要 ' + fmtToken(amount0Max + gasReserve, 18, 5) + '（含滑点缓冲和 gas），钱包 ' + fmtToken(state.balances.hype, 18, 5) + '。请点“刷新余额”或减少数量。');
       if (state.wallet.address && amounts.amount1 > state.balances.kntq) throw new Error('KNTQ 余额不足：本次需要 ' + fmtToken(amounts.amount1, 18, 5) + '，钱包 ' + fmtToken(state.balances.kntq, 18, 5) + '。请点“刷新余额”或减少 HYPE 数量。');
       const kUsd = kntqUsd();
       const totalUsd = kUsd == null ? null : Number(ethers.formatUnits(amounts.amount0, 18)) * state.market.price + Number(ethers.formatUnits(amounts.amount1, 18)) * kUsd;
@@ -1951,7 +1951,7 @@
       steps.push({ id: 'approve-token', label: '授权 KNTQ → Permit2', detail: '仅授权本次上限 ' + fmtToken(quote.amount1Max, 18, 5) + ' KNTQ', to: token, data: callData(iface.erc20, 'approve', [permit2, quote.amount1Max]), value: 0n, kind: 'approve' });
       steps.push({ id: 'approve-permit2', label: 'Permit2 授权 PositionManager', detail: '仅授权本次上限，不无限授权', to: permit2, data: callData(iface.permit2, 'approve', [token, pm, quote.amount1Max, MAX_UINT48]), value: 0n, kind: 'approve' });
     }
-    steps.push({ id: 'mint', label: '创建 Uniswap V4 仓位', detail: fmtToken(quote.amount0, 18, 6) + ' HYPE + ' + fmtToken(quote.amount1, 18, 5) + ' KNTQ · ' + (quote.range.full ? '全范围' : fmtPrice(quote.range.lowerPrice) + '–' + fmtPrice(quote.range.upperPrice)), to: pm, data: buildMintData(quote), value: quote.amount0, kind: 'mint' });
+    steps.push({ id: 'mint', label: '创建 Uniswap V4 仓位', detail: fmtToken(quote.amount0, 18, 6) + ' HYPE + ' + fmtToken(quote.amount1, 18, 5) + ' KNTQ · ' + (quote.range.full ? '全范围' : fmtPrice(quote.range.lowerPrice) + '–' + fmtPrice(quote.range.upperPrice)), to: pm, data: buildMintData(quote), value: quote.amount0Max, kind: 'mint' });
     return steps;
   }
 
@@ -2017,6 +2017,7 @@
     if (state.wallet.chainId !== Number(state.config.network.chainId)) {
       try { await ensureWalletChain(true); await setupProvider(); updateWalletUi(); await refreshAll(); } catch (e) { toast('网络切换失败', decodeErr(e), 'error'); return; }
     }
+    try { state.pool = await readPool(); } catch (error) { toast('池子刷新失败', decodeErr(error), 'error'); }
     try { await refreshBalances(); } catch (error) { toast('余额读取失败', decodeErr(error), 'error'); }
     await computeQuote();
     const q = state.compose.quote;
@@ -2275,7 +2276,9 @@
       ui.maxHypeBtn.addEventListener('click', () => {
         if (!state.wallet.address) { toast('请先连接钱包', '连接后才能读取余额。', 'error'); return; }
         const reserve = parseUnitsSafe(state.config.safety.gasReserveHype || '0.02', 18);
-        const value = state.balances.hype > reserve ? state.balances.hype - reserve : 0n;
+        const slipPct = parseFloatSafe(ui.slippageInput?.value) || 0.5;
+        const free = state.balances.hype > reserve ? state.balances.hype - reserve : 0n;
+        const value = free * 10000n / BigInt(10000 + Math.max(1, Math.round(slipPct * 100)));
         state.compose.hype = ethers.formatUnits(value, 18).replace(/\.?0+$/, '');
         state.compose.lastEdited = 'hype';
         setInputValue(ui.hypeInput, state.compose.hype);
@@ -2285,7 +2288,9 @@
     if (ui.maxKntqBtn) {
       ui.maxKntqBtn.addEventListener('click', () => {
         if (!state.wallet.address) { toast('请先连接钱包', '连接后才能读取余额。', 'error'); return; }
-        state.compose.kntq = ethers.formatUnits(state.balances.kntq, 18).replace(/\.?0+$/, '');
+        const slipPct = parseFloatSafe(ui.slippageInput?.value) || 0.5;
+        const usable = state.balances.kntq * BigInt(Math.max(1, Math.round(10000 - slipPct * 100))) / 10000n;
+        state.compose.kntq = ethers.formatUnits(usable, 18).replace(/\.?0+$/, '');
         state.compose.lastEdited = 'kntq';
         setInputValue(ui.kntqInput, state.compose.kntq);
         scheduleQuote(true);
