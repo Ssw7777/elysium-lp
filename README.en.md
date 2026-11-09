@@ -80,6 +80,14 @@ It sends pending fees, net PnL, claimed fees, range distance, HYPE total and tim
 
 A systemd timer such as `OnCalendar=*:0/5` gives a five-minute cadence. Keep `BARK_KEY` in a mode-`600` `EnvironmentFile`, not in the repository.
 
+### Bark alerts
+
+The 5-minute report also evaluates the **freshly read current positions**:
+
+- **Out of range**: alert when a live position leaves its range; repeat at most every 30 minutes while it stays out; clear the state when it returns, is withdrawn, burned or has zero liquidity.
+- **5m APR > 20,000%**: alert when the 5-minute fee-growth APR crosses the threshold; repeat at most every 30 minutes.
+- Alerts are skipped if the position set is incomplete, so a stale/removed range is never used. Alert state is private and stored outside the repository.
+
 ## Data notes
 
 - Positions are enumerated from PositionManager `Transfer` logs and filtered with `ownerOf`; `balanceOf` is checked to catch new mints quickly.

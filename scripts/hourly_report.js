@@ -15,7 +15,10 @@ const CACHE_FILE = process.env.ENTRY_CACHE || path.join(process.env.HOME || '/tm
 const CLAIMS_FILE = process.env.CLAIMS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-claims.json');
 const ACTIVE_FILE = process.env.ACTIVE_IDS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-active-ids.json');
 const REFERENCE_FILE = process.env.REFERENCE_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-reference.json');
+const ALERTS_FILE = process.env.ALERTS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-alerts.json');
 const DRY_RUN = String(process.env.DRY_RUN || '').trim() === '1';
+const APR_ALERT_THRESHOLD = Number(process.env.APR_ALERT_THRESHOLD || 20000);
+const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MINUTES || 30) * 60 * 1000;
 
 const ABI = {
   erc20: [
@@ -61,6 +64,17 @@ function saveCache(cache) {
 
 function loadReference() {
   try { return JSON.parse(fs.readFileSync(REFERENCE_FILE, 'utf8')); } catch (_) { return {}; }
+}
+
+function loadAlertState() {
+  try { return JSON.parse(fs.readFileSync(ALERTS_FILE, 'utf8')); } catch (_) { return { outOfRange: {}, aprHigh: {} }; }
+}
+
+function saveAlertState(value) {
+  try {
+    fs.mkdirSync(path.dirname(ALERTS_FILE), { recursive: true });
+    fs.writeFileSync(ALERTS_FILE, JSON.stringify(value), { mode: 0o600 });
+  } catch (_) { /* alert state is optional */ }
 }
 
 function loadActiveState() {
@@ -217,6 +231,40 @@ async function rpcRetry(fn, label, attempts = 6) {
   throw last;
 }
 
+async function sendAlerts(rows) {
+  if (DRY_RUN) console.log('[signals]', rows.map((row) => '#' + row.id + ' in=' + row.inRange + ' apr5m=' + (row.apr5m == null ? '—' : Math.round(row.apr5m))).join(' | '));
+  const state = loadAlertState();
+  state.outOfRange = state.outOfRange || {};
+  state.aprHigh = state.aprHigh || {};
+  const now = Date.now();
+  const cooldown = ALERT_COOLDOWN_MS;
+  const currentIds = new Set(rows.map((row) => String(row.id)));
+  for (const key of Object.keys(state.outOfRange || {})) if (!currentIds.has(key)) delete state.outOfRange[key];
+  for (const key of Object.keys(state.aprHigh || {})) if (!currentIds.has(key)) delete state.aprHigh[key];
+  for (const row of rows) {
+    const id = String(row.id);
+    if (row.inRange === false && (!state.outOfRange[id] || now - state.outOfRange[id] > cooldown)) {
+      if (DRY_RUN) {
+        console.log('[alert] DRY_RUN out-of-range #' + id);
+      } else {
+        await postBark('⚠️ Elysium LP 出区间', `#${id} 已出区间\n距下轨 ${row.distDown == null ? '—' : row.distDown.toFixed(1)}% / 距上轨 ${row.distUp == null ? '—' : row.distUp.toFixed(1)}%\n区间 ${fmtUsd(row.lowerUsd)} – ${fmtUsd(row.upperUsd)} KNTQ/USDT\n${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+      }
+      state.outOfRange[id] = now;
+    }
+    if (row.apr5m != null && row.apr5m > APR_ALERT_THRESHOLD && (!state.aprHigh[id] || now - state.aprHigh[id] > cooldown)) {
+      if (DRY_RUN) {
+        console.log('[alert] DRY_RUN 5m APR #' + id, row.apr5m.toFixed(0));
+      } else {
+        await postBark('🚀 Elysium LP 5m 年化超 ' + APR_ALERT_THRESHOLD + '%', `#${id} 5m 年化 ${row.apr5m.toFixed(0)}%\n本金 ${fmtUsd(row.principalUsd)} · 待领 ${fmtUsd(row.feeUsd)}\n${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+      }
+      state.aprHigh[id] = now;
+    }
+    if (row.inRange !== false) delete state.outOfRange[id];
+    if (!(row.apr5m > APR_ALERT_THRESHOLD)) delete state.aprHigh[id];
+  }
+  if (!DRY_RUN) saveAlertState(state);
+}
+
 async function runReport(rpcUrl) {
   await probeRpc(rpcUrl);
   const provider = new ethers.JsonRpcProvider(rpcUrl, Number(CONFIG.network.chainId), { staticNetwork: true });
@@ -271,6 +319,15 @@ async function runReport(rpcUrl) {
   } catch (_) { /* token amounts still show */ }
   const kntqUsd = hypeUsd > 0 && rawPrice > 0 ? hypeUsd / rawPrice : 0;
 
+  const latestBlock = await rpcRetry(() => provider.getBlock('latest'), 'latestBlock');
+  let oldBlock = null;
+  try {
+    const sample = await rpcRetry(() => provider.getBlock(Math.max(1, latestBlock.number - 10000)), 'blockSample');
+    const secPerBlock = Math.max(0.02, (latestBlock.timestamp - Number(sample.timestamp)) / 10000);
+    oldBlock = await rpcRetry(() => provider.getBlock(Math.max(1, latestBlock.number - Math.max(1000, Math.round(300 / secPerBlock)))), 'oldBlock');
+  } catch (error) {
+    console.log('[5m-apr] block window unavailable:', String(error.message || error).slice(0, 100));
+  }
   const cache = loadCache();
   const rows = [];
   let failedPositions = 0;
@@ -354,8 +411,23 @@ async function runReport(rpcUrl) {
       const currentUsd = kntqUsd;
       const lowerUsd = 1 / M.priceFromSqrtX96(M.tickToSqrtRatioX96(upper)) * hypeUsd;
       const upperUsd = 1 / M.priceFromSqrtX96(M.tickToSqrtRatioX96(lower)) * hypeUsd;
+      let apr5m = null;
+      if (oldBlock && principalUsd > 0 && hypeUsd > 0 && kntqUsd > 0) {
+        try {
+          const oldGrowth = await rpcRetry(() => state.getFeeGrowthInside(poolId, lower, upper, { blockTag: oldBlock.number }), 'oldGrowth ' + id);
+          const past0 = feeFromGrowth(liquidity, growth[0], oldGrowth[0]);
+          const past1 = feeFromGrowth(liquidity, growth[1], oldGrowth[1]);
+          const elapsed = Number(latestBlock.timestamp) - Number(oldBlock.timestamp);
+          const pastUsd = Number(ethers.formatUnits(past0, 18)) * hypeUsd + Number(ethers.formatUnits(past1, 18)) * kntqUsd;
+          if (elapsed > 60 && pastUsd >= 0) apr5m = pastUsd / principalUsd * (365 * 86400 / elapsed) * 100;
+        } catch (error) {
+          console.log('[5m-apr]', id, String(error.message || error).slice(0, 100));
+        }
+      }
       rows.push({
-        id, feeHype, feeKntq, feeUsd, pnl, principalUsd, claimedUsd,
+        id, feeHype, feeKntq, feeUsd, pnl, principalUsd, claimedUsd, apr5m,
+        inRange: currentUsd > 0 && lowerUsd > 0 && upperUsd > 0 ? currentUsd >= lowerUsd && currentUsd <= upperUsd : null,
+        lowerUsd, upperUsd,
         distUp: currentUsd > 0 ? (upperUsd / currentUsd - 1) * 100 : null,
         distDown: currentUsd > 0 ? (currentUsd / lowerUsd - 1) * 100 : null
       });
@@ -468,9 +540,11 @@ async function runReport(rpcUrl) {
   console.log(body);
   if (DRY_RUN) {
     console.log('[bark] DRY_RUN=1; skip push');
+    await sendAlerts(rows);
     return;
   }
   await postBark(title, body);
+  await sendAlerts(rows);
 }
 
 async function nativeBalance(owner) {
