@@ -1285,7 +1285,7 @@
               ? '<span class="metric-sub">只读看板 · 连接钱包后可操作</span>'
               : ((p.fees0 > 0n || p.fees1 > 0n) ? '<button class="btn small" data-action="claim" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>提取手续费</button>' : '') +
                 ((!p.closed && p.liquidity > 0n) ? '<button class="btn small primary" data-action="withdraw" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>撤池</button>' : '') +
-                (p.closed ? '<span class="metric-sub">已隐藏空仓 · 仍可领取剩余手续费</span>' : '')) +
+                (p.closed ? '<button class="btn small" data-action="burn" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>销毁空 NFT</button>' : '')) +
           '</div>' +
           '<div class="pos-detail"><span>NFT #' + p.tokenId + (p.entryAgeSec == null ? '' : ' · 持仓 ' + M.formatDuration(p.entryAgeSec)) + '</span><b>2.00%</b></div>' +
         '</div>' +
@@ -1315,7 +1315,7 @@
       ui.positionsEmpty.hidden = false;
       if (state.hiddenEmpty > 0 && state.hideClosed) {
         ui.positionsEmpty.querySelector('h4').textContent = '已撤空仓已隐藏';
-        ui.positionsEmpty.querySelector('p').textContent = '当前地址有 ' + state.hiddenEmpty + ' 个空仓。关闭“隐藏空仓”可以查看并领取剩余手续费。';
+        ui.positionsEmpty.querySelector('p').textContent = '当前地址有 ' + state.hiddenEmpty + ' 个空 NFT（Ascend 仍会显示）。关闭“隐藏空仓”后可逐个销毁 NFT；销毁后 Ascend 不再列出。';
       } else {
         ui.positionsEmpty.querySelector('h4').textContent = '还没有 KNTQ/HYPE 仓位';
         ui.positionsEmpty.querySelector('p').textContent = state.wallet.address ? '右侧输入 HYPE 和 KNTQ 数量，先预览再创建仓位。' : '连接钱包后，这里会显示真实 V4 NFT 仓位、可领取手续费与近期实测年化。';
@@ -1684,6 +1684,15 @@
     return iface.pm.encodeFunctionData('modifyLiquidities', [unlock, deadline]);
   }
 
+  function buildBurnData(tokenId, amount0Min, amount1Min, deadline) {
+    const cfg = state.config;
+    // BURN_POSITION = action 0x03: clears all liquidity, takes both currencies and burns the NFT.
+    const burn = coder.encode(['uint256', 'uint128', 'uint128', 'bytes'], [tokenId, amount0Min, amount1Min, '0x']);
+    const take = coder.encode(['address', 'address', 'address'], [cfg.uniswap.poolKey.currency0, cfg.uniswap.poolKey.currency1, state.wallet.address]);
+    const unlock = encodeActionsParams([3, 17], [burn, take]);
+    return iface.pm.encodeFunctionData('modifyLiquidities', [unlock, deadline]);
+  }
+
   function buildMintSteps(quote) {
     const cfg = state.config;
     const token = getAddress(cfg.tokens.KNTQ.address);
@@ -1848,10 +1857,15 @@
 
   function withdrawBody(position, percent, slip) {
     const e = withdrawalAmounts(position, percent, slip);
+    const full = percent >= 100;
+    const action = full ? 'BURN_POSITION + TAKE_PAIR' : 'DECREASE_LIQUIDITY + TAKE_PAIR';
+    const warning = full
+      ? 'BURN_POSITION 会自动撤出全部流动性、领取本金和手续费，并销毁 NFT。销毁后 Ascend 不会再把这个仓位列出来。最低数量按 2% 保护。'
+      : 'DECREASE_LIQUIDITY + TAKE_PAIR；NFT 会保留，只有 100% 撤池才会销毁 NFT。最低数量按 2% 保护。';
     return '<div class="preview-grid"><div class="preview-item"><span>撤出比例</span><strong>' + percent + '%</strong></div><div class="preview-item"><span>滑点</span><strong>' + fmtNum(slip / 100, 2) + '%</strong></div><div class="preview-item"><span>预计 HYPE</span><strong>' + fmtToken(e.amount0, 18, 6) + '</strong></div><div class="preview-item"><span>预计 KNTQ</span><strong>' + fmtToken(e.amount1, 18, 5) + '</strong></div><div class="preview-item"><span>最低 HYPE</span><strong>' + fmtToken(e.min0, 18, 6) + '</strong></div><div class="preview-item"><span>最低 KNTQ</span><strong>' + fmtToken(e.min1, 18, 5) + '</strong></div></div>' +
       '<div class="field" style="margin-top:12px"><span>撤出比例</span><select class="input" id="withdrawPct">' + [25, 50, 75, 100].map((v) => '<option value="' + v + '"' + (v === percent ? ' selected' : '') + '>' + v + '%</option>').join('') + '</select></div>' +
-      '<div class="warning-box">DECREASE_LIQUIDITY + TAKE_PAIR；HYPE 是原生资产，KNTQ 通过 Permit2/池子结算。最低数量按你填写的滑点保护。</div>' +
-      '<div class="preview-section"><h4>执行步骤</h4><div class="preview-list"><div class="preview-step pending" data-step-id="withdraw"><span class="step-index">1</span><div><strong>减少流动性 + 领取本金/手续费</strong><small>modifyLiquidities([DECREASE_LIQUIDITY, TAKE_PAIR])</small></div><span class="step-state">待签名前模拟</span></div></div></div>';
+      '<div class="warning-box">' + warning + '</div>' +
+      '<div class="preview-section"><h4>执行步骤</h4><div class="preview-list"><div class="preview-step pending" data-step-id="withdraw"><span class="step-index">1</span><div><strong>' + (full ? '销毁 NFT + 撤出全部本金/手续费' : '减少流动性 + 领取本金/手续费') + '</strong><small>modifyLiquidities([' + action + '])</small></div><span class="step-state">待签名前模拟</span></div></div></div>';
   }
 
   function openWithdraw(position) {
@@ -1872,8 +1886,9 @@
         const e = withdrawalAmounts(position, percent, slip);
         if (e.liquidity <= 0n) throw new Error('撤出数量为 0');
         const deadline = nowSec() + 600;
-        const data = buildCollectData(position.tokenId, e.liquidity, e.min0, e.min1, deadline);
-        const step = { id: 'withdraw', label: '减少流动性 + 领取本金/手续费', detail: percent + '% · 最低 ' + fmtToken(e.min0, 18, 6) + ' HYPE + ' + fmtToken(e.min1, 18, 5) + ' KNTQ', to: getAddress(state.config.uniswap.positionManager), data, value: 0n };
+        const fullBurn = percent >= 100;
+        const data = fullBurn ? buildBurnData(position.tokenId, e.min0, e.min1, deadline) : buildCollectData(position.tokenId, e.liquidity, e.min0, e.min1, deadline);
+        const step = { id: 'withdraw', label: fullBurn ? '销毁 NFT + 撤出全部本金/手续费' : '减少流动性 + 领取本金/手续费', detail: percent + '% · 最低 ' + fmtToken(e.min0, 18, 6) + ' HYPE + ' + fmtToken(e.min1, 18, 5) + ' KNTQ', to: getAddress(state.config.uniswap.positionManager), data, value: 0n };
         await executeSteps([step], (s, i, phase) => {
           if (phase === 'simulating') setStepState('withdraw', '模拟中…', 'pending');
           if (phase === 'signing') setStepState('withdraw', '模拟通过 · 请在钱包确认', 'pending');
@@ -1881,11 +1896,34 @@
           if (phase === 'confirmed') setStepState('withdraw', '已确认', '');
         });
         if (percent >= 100) await clearClaim(position.tokenId);
-        toast('撤池完成', percent === 100 ? '仓位已变为空仓；已领手续费记录已清除。' : '已撤出 ' + percent + '%。', 'success');
+        toast('撤池完成', percent === 100 ? 'NFT 已销毁，本金和手续费已撤回；Ascend 不会再列出这个仓位。' : '已撤出 ' + percent + '%。', 'success');
         closeModal(true); await refreshAll();
       }
     });
     render();
+  }
+
+  function openBurnEmpty(position) {
+    if (txBlocked()) { toast('数据过期', '刷新后再销毁。', 'error'); return; }
+    const deadline = nowSec() + 600;
+    const data = buildBurnData(position.tokenId, 0n, 0n, deadline);
+    const step = { id: 'burn', label: '销毁空 NFT', detail: 'BURN_POSITION · NFT #' + position.tokenId, to: getAddress(state.config.uniswap.positionManager), data, value: 0n };
+    openModal({
+      eyebrow: 'BURN EMPTY NFT', title: '销毁空仓 NFT #' + position.tokenId,
+      body: '<div class="warning-box">这个 NFT 已没有流动性。BURN_POSITION 会销毁 NFT，之后 Ascend 和其他仓位列表不会再显示它。</div><div class="preview-section"><h4>执行步骤</h4><div class="preview-list">' + planStepHtml(step, 0) + '</div></div>',
+      confirmText: '模拟并销毁',
+      onConfirm: async () => {
+        await executeSteps([step], (s, i, phase) => {
+          if (phase === 'simulating') setStepState('burn', '模拟中…', 'pending');
+          if (phase === 'signing') setStepState('burn', '模拟通过 · 请在钱包确认', 'pending');
+          if (phase === 'sent') setStepState('burn', '已发送，等待确认', 'pending');
+          if (phase === 'confirmed') setStepState('burn', '已确认', '');
+        });
+        await clearClaim(position.tokenId);
+        toast('空 NFT 已销毁', 'Ascend 不会再列出这个仓位。', 'success');
+        closeModal(true); await refreshAll();
+      }
+    });
   }
 
   function openWalletModal() {
@@ -1978,6 +2016,7 @@
       if (!p) return;
       if (btn.getAttribute('data-action') === 'claim') openClaim(p);
       if (btn.getAttribute('data-action') === 'withdraw') openWithdraw(p);
+      if (btn.getAttribute('data-action') === 'burn') openBurnEmpty(p);
     });
     if (ui.chartTabs) {
       ui.chartTabs.addEventListener('click', (event) => {
