@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <base href="/elysium-lp/">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Elysium LP · KNTQ/HYPE Uniswap V4 看板">
+  <title>Elysium LP · KNTQ/HYPE</title>
+  <link rel="icon" href="elysium-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <img class="brand-mark" src="elysium-logo.png" alt="Elysium">
+        <div><h1 id="appTitle">Elysium LP</h1><p id="appSubtitle">KNTQ / HYPE · 价格按 USDT 折算</p></div>
+      </div>
+      <div class="header-actions">
+        <span class="pill" id="networkBadge">Elysium</span>
+        <button class="pill rpc" id="rpcBadge" type="button">RPC —</button>
+        <button class="btn small" id="refreshBtn" type="button">刷新</button>
+        <button class="btn primary" id="connectBtn" type="button">连接钱包</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="banner" id="staleBanner" hidden>
+    <span id="staleTitle">数据已过期</span>
+    <span id="staleText"></span>
+    <button class="link-btn" id="staleRefreshBtn" type="button">立即重试</button>
+  </div>
+
+  <main class="container">
+    <section class="pool-head">
+      <div>
+        <h2>KNTQ / HYPE <span class="fee-badge">1%</span></h2>
+        <p>Elysium · Uniswap V4 · 1% · 价格按 USDT 折算</p>
+      </div>
+      <div class="pool-price">
+        <div><span>价格</span><strong id="poolPrice">—</strong></div>
+        <div><span>HYPE</span><strong id="marketPrice">$—</strong></div>
+        <div><span>行情</span><strong id="marketAge">—</strong></div>
+      </div>
+    </section>
+
+    <section class="summary-strip">
+      <div><span>总本金</span><strong id="sumPrincipal">$—</strong><small id="sumPrincipalTokens">—</small></div>
+      <div><span>待领手续费</span><strong id="sumFees">$—</strong><small id="sumFeesTokens">—</small></div>
+      <div><span>加权预估年化</span><strong id="sumApr">—</strong><small>按 5 分钟主窗口</small></div>
+      <div><span>仓位</span><strong id="sumPositions">—</strong><small id="sumEmpty">空仓默认隐藏</small></div>
+    </section>
+
+    <section class="pnl-strip">
+      <div><span>投入时价值</span><strong id="totalEntry">$—</strong><small>按建仓时 HYPE/USDT</small></div>
+      <div><span>目前价值</span><strong id="totalCurrent">$—</strong><small>本金 + 待领手续费</small></div>
+      <div><span>PNL</span><strong id="totalPnl">—</strong><small id="totalPnlPct">含待领 · 未实现</small></div>
+    </section>
+
+    <section class="yield-strip">
+      <div><span>过去 1 小时年化</span><strong id="hourApr">—</strong><small>不足 1 小时时按可用窗口估算</small></div>
+      <div><span>未来 1 天预估收益</span><strong id="dayYield">—</strong><small>按过去 1 小时年化折算</small></div>
+      <div><span>5 分钟 / 30 分钟年化</span><strong id="shortApr">—</strong><small>每 60 秒同步一次</small></div>
+    </section>
+
+    <section class="card positions-panel dashboard-positions">
+      <div class="card-head">
+        <h3>我的仓位</h3>
+        <div class="tools">
+          <select id="sortSelect" class="select">
+            <option value="principal">按本金</option>
+            <option value="fees">按待领</option>
+            <option value="apr">按年化</option>
+            <option value="newest">按时间</option>
+            <option value="range">按区间</option>
+          </select>
+          <label class="check"><input type="checkbox" id="hideClosed"><span>隐藏空仓</span></label>
+        </div>
+      </div>
+      <div class="range-notice" id="rangeNotice" hidden></div>
+      <div id="positionsGrid" class="positions-list" aria-live="polite"></div>
+      <div id="positionsEmpty" class="empty-state">
+        <h4>还没有 KNTQ/HYPE 仓位</h4>
+        <p>添加流动性请去 Ascend 或其他入口；这里只做持仓看板。</p>
+        <a class="btn small" href="https://app.ascendlaunch.xyz/pools" target="_blank" rel="noopener noreferrer">去 Ascend 添加流动性</a>
+      </div>
+    </section>
+
+
+    <section class="card distribution-card">
+      <div class="distribution-head">
+        <div><h3>流动性分布</h3><p>KNTQ / USDT · 由 KNTQ/HYPE 池按 HYPE/USDT 折算</p></div>
+        <div class="dist-tabs"><button type="button" class="active">流动性</button><span class="fee-badge" id="distributionTag">当前</span></div>
+      </div>
+      <div class="distribution-body">
+        <div class="distribution-main">
+          <div class="distribution-price"><span>1 KNTQ =</span><strong id="distCurrentPrice">—</strong><em>USDT</em><b id="distAltPrice">—</b></div>
+          <div class="distribution-chart" id="liquidityBars"><div class="dist-empty">读取中…</div></div>
+          <div class="distribution-axis" id="distributionAxis"></div>
+          <div class="liquidity-table" id="liquidityTable"></div>
+        </div>
+        <aside class="distribution-stats">
+          <h4>统计数据</h4>
+          <div class="dist-stat"><span>当前价格</span><b id="distStatPrice">—</b></div>
+          <div class="dist-stat"><span>活跃流动性</span><b id="distActiveLiquidity">—</b></div>
+          <div class="dist-stat"><span>主区间</span><b id="distMainRange">—</b></div>
+          <div class="dist-stat"><span>主区间占比</span><b id="distMainShare">—</b></div>
+          <div class="dist-stat"><span>扫描区间</span><b id="distCount">—</b></div>
+          <div class="dist-stat"><span>HYPE / USDT</span><b id="distHypePrice">—</b></div>
+          <div class="dist-legend"><i></i><span>橙色为当前价格所在区间</span></div>
+        </aside>
+      </div>
+    </section>
+
+    <footer class="footer"><span id="footerRpc">RPC —</span><span id="footerUpdated">—</span></footer>
+  </main>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header class="modal-head"><div><p id="modalEyebrow">TRANSACTION</p><h3 id="modalTitle">交易预览</h3></div><button class="icon-btn" id="modalClose" type="button">×</button></header>
+      <div class="modal-body" id="modalBody"></div>
+      <footer class="modal-foot"><button class="btn" id="modalCancel" type="button">取消</button><button class="btn primary" id="modalConfirm" type="button">确认</button></footer>
+    </section>
+  </div>
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+  <noscript><div class="noscript">需要启用 JavaScript。</div></noscript>
+
+  <script src="vendor/ethers.umd.min.js"></script>
+  <script src="math.js"></script>
+  <script src="abi.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
