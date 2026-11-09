@@ -9,7 +9,7 @@
   const Q128 = 1n << 128n;
   const MAX_UINT160 = (1n << 160n) - 1n;
   const MAX_UINT48 = (1n << 48n) - 1n;
-  const STORAGE_PREFIX = 'elysium-lp:v1:';
+  const STORAGE_PREFIX = 'elysium-lp:v2:';
 
   if (!window.ethers || !M || !ABI) {
     document.body.innerHTML = '<div class="noscript">依赖加载失败，请刷新页面。</div>';
@@ -918,7 +918,7 @@
       let positions = [];
       let hidden = 0;
       if (state.wallet.address && state.wallet.chainId === Number(state.config.network.chainId)) {
-        balances = await readBalances();
+        try { balances = await readBalances(); } catch (error) { console.warn('[balances]', decodeErr(error)); balances = state.balances; }
         await loadClaims();
         try { state.hyperEvmHype = await readHyperEvmBalance(); } catch (_) { state.hyperEvmHype = null; }
         const result = await readPositions(block);
