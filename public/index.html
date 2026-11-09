@@ -135,7 +135,15 @@
               <button type="button" data-preset="full">全范围</button>
               <button type="button" data-preset="custom">自定义</button>
             </div>
-            <div class="build-custom" id="customRange" hidden><input id="customLower" inputmode="decimal" placeholder="下限 KNTQ/HYPE"><span>—</span><input id="customUpper" inputmode="decimal" placeholder="上限 KNTQ/HYPE"></div>
+            <div class="build-custom range-builder" id="customRange" hidden>
+              <div class="range-slider-labels"><span>下限 <b id="sliderLower">—</b></span><span>当前 <b id="sliderCurrent">—</b></span><span>上限 <b id="sliderUpper">—</b></span></div>
+              <div class="range-slider-wrap">
+                <div class="range-slider-track"><div class="range-slider-fill" id="rangeSliderFill"></div><div class="range-slider-current" id="rangeSliderCurrent"></div></div>
+                <input id="rangeMin" type="range" min="0" max="1000" step="1" value="400" aria-label="区间下限">
+                <input id="rangeMax" type="range" min="0" max="1000" step="1" value="600" aria-label="区间上限">
+              </div>
+              <div class="range-slider-actions"><button type="button" id="rangeZoomIn">− 缩小范围</button><button type="button" id="rangeZoomOut">+ 放宽范围</button><small>拖动两个圆点调整区间</small></div>
+            </div>
             <div class="build-range-preview"><span>下限 <b id="rangeLower">—</b><small id="rangeLowerUsd">$—</small></span><span>当前 <b id="rangeCurrent">—</b></span><span>上限 <b id="rangeUpper">—</b><small id="rangeUpperUsd">$—</small></span></div>
           </div>
           <div class="build-options"><label>滑点 <input id="slippageInput" inputmode="decimal" value="0.50"> %</label><small id="slippageHint">只使用你填的百分比，失败不会自动放宽</small></div>
@@ -187,6 +195,6 @@
   <script src="vendor/ethers.umd.min.js"></script>
   <script src="math.js"></script>
   <script src="abi.js"></script>
-  <script src="app.js?v=20261110-2520"></script>
+  <script src="app.js?v=20261110-2530"></script>
 </body>
 </html>

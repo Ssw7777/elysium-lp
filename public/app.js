@@ -30,7 +30,7 @@
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
     'rangeUpper', 'rangeUpperUsd', 'customRange', 'customLower', 'customUpper', 'slippageInput', 'slippageHint',
     'quoteState', 'quoteBudget', 'quoteHype', 'quoteKntq', 'quoteRatio', 'quoteRange', 'quoteFee', 'quoteSlip', 'quoteMin', 'quoteNote',
-    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'refreshBalBtn', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
+    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'refreshBalBtn', 'sliderLower', 'sliderCurrent', 'sliderUpper', 'rangeMin', 'rangeMax', 'rangeSliderFill', 'rangeSliderCurrent', 'rangeZoomIn', 'rangeZoomOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
     'modalBody', 'modalClose', 'modalCancel', 'modalConfirm', 'toastStack',
     'chartTabs', 'chartInvert', 'priceChart', 'chartEmpty', 'chartLast', 'chartStats',
     'liquidityBars', 'distributionTag', 'distCurrentPrice', 'distAltPrice', 'distStatPrice', 'distHypePrice',
@@ -68,7 +68,8 @@
     loading: true,
     compose: {
       hype: '', kntq: '', lastEdited: 'hype', preset: '10', lower: '', upper: '', slippagePct: 0.5,
-      quote: null, error: null, quoting: false, seq: 0
+      quote: null, error: null, quoting: false, seq: 0,
+      customLowerTick: null, customUpperTick: null, sliderMinTick: null, sliderMaxTick: null
     },
     chart: { tf: '5m', invert: false, candles: [], loading: false, seq: 0, cache: {} },
     distribution: { loading: false, at: 0 },
@@ -1158,6 +1159,95 @@
     await refreshAll();
   }
 
+  function sliderDomain() {
+    const pool = state.pool;
+    if (!pool) return null;
+    if (state.compose.sliderMinTick == null || state.compose.sliderMaxTick == null) {
+      state.compose.sliderMinTick = M.nearestUsableTick(pool.tick - 6000, pool.tickSpacing);
+      state.compose.sliderMaxTick = M.nearestUsableTick(pool.tick + 6000, pool.tickSpacing);
+    }
+    return { min: state.compose.sliderMinTick, max: state.compose.sliderMaxTick };
+  }
+
+  function ensureCustomTicks() {
+    const pool = state.pool;
+    if (!pool) return;
+    const domain = sliderDomain();
+    if (state.compose.customLowerTick == null || state.compose.customUpperTick == null) {
+      state.compose.customLowerTick = M.nearestUsableTick(pool.tick - 1000, pool.tickSpacing);
+      state.compose.customUpperTick = M.nearestUsableTick(pool.tick + 1000, pool.tickSpacing);
+    }
+    state.compose.customLowerTick = Math.max(domain.min, Math.min(domain.max, Number(state.compose.customLowerTick)));
+    state.compose.customUpperTick = Math.max(domain.min, Math.min(domain.max, Number(state.compose.customUpperTick)));
+    if (!(state.compose.customLowerTick < state.compose.customUpperTick)) {
+      state.compose.customLowerTick = Math.max(domain.min, state.compose.customUpperTick - pool.tickSpacing);
+    }
+  }
+
+  function tickAtSlider(value) {
+    const d = sliderDomain();
+    if (!d) return 0;
+    const raw = d.min + (d.max - d.min) * Number(value) / 1000;
+    return M.nearestUsableTick(raw, state.pool.tickSpacing);
+  }
+
+  function sliderAtTick(tick) {
+    const d = sliderDomain();
+    if (!d || d.max === d.min) return 500;
+    return Math.max(0, Math.min(1000, Math.round((Number(tick) - d.min) / (d.max - d.min) * 1000)));
+  }
+
+  function updateRangeSlider(range) {
+    if (!ui.rangeMin || !ui.rangeMax) return;
+    ensureCustomTicks();
+    const d = sliderDomain();
+    if (!d) return;
+    const lower = state.compose.customLowerTick;
+    const upper = state.compose.customUpperTick;
+    const loPct = sliderAtTick(lower);
+    const hiPct = sliderAtTick(upper);
+    if (Number(ui.rangeMin.value) !== loPct) ui.rangeMin.value = String(loPct);
+    if (Number(ui.rangeMax.value) !== hiPct) ui.rangeMax.value = String(hiPct);
+    if (ui.rangeSliderFill) { ui.rangeSliderFill.style.left = loPct / 10 + '%'; ui.rangeSliderFill.style.right = (100 - hiPct / 10) + '%'; }
+    if (ui.rangeSliderCurrent) {
+      const cur = sliderAtTick(state.pool?.tick || 0);
+      ui.rangeSliderCurrent.style.left = cur / 10 + '%';
+      ui.rangeSliderCurrent.hidden = cur < 0 || cur > 1000;
+    }
+    if (ui.sliderLower) ui.sliderLower.textContent = range?.full ? '≈0' : (range ? fmtPrice(range.lowerPrice) : '—');
+    if (ui.sliderUpper) ui.sliderUpper.textContent = range?.full ? '∞' : (range ? fmtPrice(range.upperPrice) : '—');
+    if (ui.sliderCurrent) ui.sliderCurrent.textContent = state.pool ? fmtPrice(state.pool.price) : '—';
+  }
+
+  function applySliderTicks() {
+    if (!ui.rangeMin || !ui.rangeMax) return;
+    let lo = tickAtSlider(ui.rangeMin.value);
+    let hi = tickAtSlider(ui.rangeMax.value);
+    if (lo >= hi) {
+      if (document.activeElement === ui.rangeMin) lo = Math.max(state.compose.sliderMinTick, hi - state.pool.tickSpacing);
+      else hi = Math.min(state.compose.sliderMaxTick, lo + state.pool.tickSpacing);
+    }
+    state.compose.customLowerTick = lo;
+    state.compose.customUpperTick = hi;
+    try { updateRangeUi(selectedRange()); } catch (_) { /* quote will show error */ }
+    scheduleQuote(true);
+  }
+
+  function zoomCustomRange(factor) {
+    ensureCustomTicks();
+    const d = sliderDomain();
+    const mid = (state.compose.customLowerTick + state.compose.customUpperTick) / 2;
+    let half = (state.compose.customUpperTick - state.compose.customLowerTick) * factor / 2;
+    half = Math.max(state.pool.tickSpacing, Math.min(half, (d.max - d.min) / 2));
+    state.compose.customLowerTick = M.nearestUsableTick(mid - half, state.pool.tickSpacing);
+    state.compose.customUpperTick = M.nearestUsableTick(mid + half, state.pool.tickSpacing);
+    if (!(state.compose.customLowerTick < state.compose.customUpperTick)) {
+      state.compose.customLowerTick = d.min; state.compose.customUpperTick = d.max;
+    }
+    try { updateRangeUi(selectedRange()); } catch (_) { /* quote will show error */ }
+    scheduleQuote(true);
+  }
+
   function selectedRange() {
     const pool = state.pool;
     if (!pool) return null;
@@ -1167,11 +1257,13 @@
       return { lowerTick, upperTick, full: true, lowerPrice: 0, upperPrice: Infinity, rawLower: M.priceFromSqrtX96(M.tickToSqrtRatioX96(lowerTick)), rawUpper: M.priceFromSqrtX96(M.tickToSqrtRatioX96(upperTick)) };
     }
     if (state.compose.preset === 'custom') {
-      const loUi = parseFloatSafe(state.compose.lower);
-      const hiUi = parseFloatSafe(state.compose.upper);
-      if (!(loUi > 0) || !(hiUi > loUi)) throw new Error('自定义区间需要 0 < 下限 < 上限');
-      const raw = M.rangeFromPrices(1 / hiUi, 1 / loUi, pool.tickSpacing);
-      return { lowerTick: raw.lowerTick, upperTick: raw.upperTick, full: false, lowerPrice: 1 / raw.upperPrice, upperPrice: 1 / raw.lowerPrice, rawLower: raw.lowerPrice, rawUpper: raw.upperPrice };
+      ensureCustomTicks();
+      const lowerTick = Number(state.compose.customLowerTick);
+      const upperTick = Number(state.compose.customUpperTick);
+      if (!Number.isInteger(lowerTick) || !Number.isInteger(upperTick) || !(lowerTick < upperTick)) throw new Error('拖动左右圆点设置有效区间');
+      const rawLower = M.priceFromSqrtX96(M.tickToSqrtRatioX96(lowerTick));
+      const rawUpper = M.priceFromSqrtX96(M.tickToSqrtRatioX96(upperTick));
+      return { lowerTick, upperTick, full: false, lowerPrice: 1 / rawUpper, upperPrice: 1 / rawLower, rawLower, rawUpper };
     }
     const pct = Number(state.compose.preset);
     if (!(pct > 0) || pct > 99) throw new Error('区间百分比无效');
@@ -1191,6 +1283,7 @@
     const h = state.market?.price;
     ui.rangeLowerUsd.textContent = h && !range.full ? fmtUsd(range.lowerPrice * (kntqUsd() || 0)) : '$—';
     ui.rangeUpperUsd.textContent = h && !range.full ? fmtUsd(range.upperPrice * (kntqUsd() || 0)) : '$—';
+    if (state.compose.preset === 'custom') updateRangeSlider(range);
   }
 
   function setInputValue(el, value) {
@@ -2203,16 +2296,20 @@
         const btn = event.target.closest('button[data-preset]');
         if (!btn) return;
         state.compose.preset = btn.dataset.preset;
+        if (state.compose.preset === 'custom') ensureCustomTicks();
         updatePresetUi();
+        try { updateRangeUi(selectedRange()); } catch (_) { updateRangeUi(null); }
         scheduleQuote(true);
       });
     }
-    if (ui.customLower) ui.customLower.addEventListener('input', () => { state.compose.lower = ui.customLower.value; state.compose.preset = 'custom'; updatePresetUi(); scheduleQuote(); });
-    if (ui.customUpper) ui.customUpper.addEventListener('input', () => { state.compose.upper = ui.customUpper.value; state.compose.preset = 'custom'; updatePresetUi(); scheduleQuote(); });
     if (ui.slippageInput) ui.slippageInput.addEventListener('input', () => { state.compose.slippagePct = parseFloatSafe(ui.slippageInput.value); updateComposeUi(); scheduleQuote(); });
     if (ui.previewBtn) ui.previewBtn.addEventListener('click', () => { previewBuild().catch((error) => toast('预览失败', decodeErr(error), 'error')); });
     if (ui.emptyComposeBtn) ui.emptyComposeBtn.addEventListener('click', () => { const node = ui.hypeInput || ui.composer; if (node) node.focus(); });
     if (ui.refreshBalBtn) ui.refreshBalBtn.addEventListener('click', async () => { try { await refreshBalances(); scheduleQuote(true); toast('余额已刷新', '已重新读取钱包余额。', 'success'); } catch (error) { toast('余额刷新失败', decodeErr(error), 'error'); } });
+    if (ui.rangeMin) ui.rangeMin.addEventListener('input', applySliderTicks);
+    if (ui.rangeMax) ui.rangeMax.addEventListener('input', applySliderTicks);
+    if (ui.rangeZoomIn) ui.rangeZoomIn.addEventListener('click', () => zoomCustomRange(0.75));
+    if (ui.rangeZoomOut) ui.rangeZoomOut.addEventListener('click', () => zoomCustomRange(1.33));
     ui.positionsGrid.addEventListener('click', (event) => {
       const btn = event.target.closest('button[data-action]');
       if (!btn) return;
