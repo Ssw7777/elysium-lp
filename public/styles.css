@@ -578,3 +578,5 @@ body { font-size: 17px; line-height: 1.5; font-weight: 500; }
 .range-slider-actions { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .range-slider-actions button { border: 1px solid var(--line-strong); background: #fff; border-radius: 6px; padding: 4px 7px; color: var(--text); font-size: 10.5px; font-weight: 600; cursor: pointer; }
 .range-slider-actions small { margin-left: auto; color: var(--muted-2); font-size: 10px; }
+.pill.chart-link { text-decoration: none; color: var(--accent); border-color: #d6e4ef; background: #f4f9fd; }
+.pill.chart-link:hover { background: #e9f3fb; }

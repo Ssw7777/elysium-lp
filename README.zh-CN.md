@@ -9,7 +9,7 @@
 - 已领取手续费**继续计入 PnL**，直到该仓位 100% 撤池；仓位卡显示累计已领 USD。
 - 5m / 30m / 1h 年化、未来 1 天预估收益，默认 60 秒刷新。
 - Uniswap 风格 KNTQ/USDT 流动性分布、当前价高亮、统计卡和主要区间表。
-- 站内 KNTQ/HYPE K 线（1m/5m/15m/1h），由池子 Swap 成交生成；OKX 因禁止 iframe 只提供外链。
+- 顶部提供 KNTQ/USDT 的 OKX K 线直达链接；OKX 禁止 iframe（`X-Frame-Options: DENY`），因此新标签页打开。
 - 底部 HYPE 本位小窗口：Elysium 钱包 + LP 本金折合 + HyperEVM 钱包，可选参考 HYPE 数量。
 - 添加流动性面板：任意一侧自由输入、自动配比、区间预设/自定义、滑点预览、Permit2 授权和 V4 mint。
 - 可选浏览器钱包模式：领取手续费 / 撤池；支持 OKX 内置 Elysium 网络，不在 OKX 里自动新增自定义网络。
