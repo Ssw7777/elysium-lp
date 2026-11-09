@@ -102,9 +102,38 @@ async function postBark(title, body) {
   console.log('[bark]', response.status, (await response.text()).slice(0, 180));
 }
 
-async function main() {
-  if (!OWNER.startsWith('0x') || OWNER.length !== 42) throw new Error('DEFAULT_ADDRESS invalid');
-  const provider = new ethers.JsonRpcProvider(CONFIG.network.rpcUrls[0].url, Number(CONFIG.network.chainId), { staticNetwork: true });
+function safeError(error) {
+  return String(error?.message || error || 'unknown error')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+}
+
+async function probeRpc(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] }),
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`RPC HTTP ${response.status}`);
+    const payload = await response.json();
+    if (!payload || payload.error || !payload.result) throw new Error(payload?.error?.message || 'RPC probe failed');
+    if (Number(BigInt(payload.result)) !== Number(CONFIG.network.chainId)) throw new Error('RPC chainId mismatch');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runReport(rpcUrl) {
+  await probeRpc(rpcUrl);
+  const provider = new ethers.JsonRpcProvider(rpcUrl, Number(CONFIG.network.chainId), { staticNetwork: true });
+  const connection = provider._getConnection?.();
+  if (connection) connection.timeout = 20000;
   const pmAddress = ethers.getAddress(CONFIG.uniswap.positionManager);
   const stateAddress = ethers.getAddress(CONFIG.uniswap.stateView);
   const pm = new ethers.Contract(pmAddress, ABI.pm, provider);
@@ -239,8 +268,25 @@ async function main() {
   await postBark(title, lines.join('\n'));
 }
 
+async function main() {
+  if (!OWNER.startsWith('0x') || OWNER.length !== 42) throw new Error('DEFAULT_ADDRESS invalid');
+  let lastError = null;
+  for (const endpoint of CONFIG.network.rpcUrls) {
+    try {
+      console.log('[rpc]', endpoint.name);
+      await runReport(endpoint.url);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.error('[rpc failed]', endpoint.name, safeError(error));
+    }
+  }
+  throw lastError || new Error('all RPC endpoints failed');
+}
+
 main().catch(async (error) => {
-  console.error('[report]', String(error.message || error).slice(0, 300));
-  try { await postBark('⚠️ Elysium LP 报表失败', String(error.message || error).slice(0, 300)); } catch (_) { /* noop */ }
+  const message = safeError(error);
+  console.error('[report]', message);
+  try { await postBark('⚠️ Elysium LP 报表失败', message); } catch (_) { /* noop */ }
   process.exitCode = 1;
 });
