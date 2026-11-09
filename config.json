@@ -81,6 +81,8 @@
     "pollSeconds": 60,
     "hideClosedDefault": true,
     "defaultAddress": "",
-    "watchOnly": false
+    "watchOnly": false,
+    "hypeReference": 0,
+    "hyperEvmRpc": "https://rpc.hyperliquid.xyz/evm"
   }
 }

@@ -389,3 +389,126 @@ body { font-size: 16px; line-height: 1.55; font-weight: 450; }
 }
 .dashboard-positions { margin-top: 0; }
 
+.hype-card { margin-top: 16px; }
+.hype-card .card-head small { display: block; color: var(--muted-2); font-size: 10.5px; margin-top: 2px; }
+.hype-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+.hype-cell { padding: 14px 16px; min-width: 0; }
+.hype-cell + .hype-cell { border-left: 1px solid var(--line); }
+.hype-cell > span { display: block; color: var(--muted); font-size: 12px; font-weight: 600; }
+.hype-cell > strong { display: block; margin-top: 3px; font-family: var(--mono); font-size: 22px; font-weight: 650; }
+.hype-cell > small { display: block; margin-top: 2px; color: var(--muted-2); font-size: 10.5px; }
+.hype-cell.total { background: #fbfaf7; }
+.hype-cell.total > strong { color: var(--green); }
+.hype-cell.total > strong.negative { color: var(--red); }
+@media (max-width: 800px) {
+  .hype-grid { grid-template-columns: 1fr 1fr; }
+  .hype-cell:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
+  .hype-cell:nth-child(4) { border-top: 1px solid var(--line); }
+}
+@media (max-width: 620px) {
+  .hype-cell > strong { font-size: 19px; }
+  .hype-grid { grid-template-columns: 1fr 1fr; }
+}
+/* Readability pass: bigger type, less dead space */
+body { font-size: 17px; line-height: 1.5; font-weight: 500; }
+.container { padding: 18px 20px 30px; }
+.pill { font-size: 13px; height: 31px; padding: 0 12px; }
+.btn { font-size: 14.5px; height: 38px; padding: 0 16px; }
+.btn.small { font-size: 13px; height: 32px; padding: 0 12px; }
+.pool-head { margin-bottom: 12px; }
+.pool-head h2 { font-size: 30px; }
+.pool-head p { font-size: 14px; }
+.pool-price span { font-size: 12px; }
+.pool-price strong { font-size: 15px; }
+.summary-strip, .pnl-strip, .yield-strip { margin-bottom: 12px; }
+.summary-strip > div, .pnl-strip > div, .yield-strip > div { padding: 10px 14px; }
+.summary-strip span { font-size: 13px; font-weight: 650; }
+.summary-strip strong { font-size: 25px; font-weight: 700; }
+.summary-strip small { font-size: 11.5px; }
+.pnl-strip span { font-size: 13px; font-weight: 650; }
+.pnl-strip strong { font-size: 25px; font-weight: 700; }
+.pnl-strip small { font-size: 11.5px; }
+.yield-strip span { font-size: 13px; font-weight: 650; }
+.yield-strip strong { font-size: 22px; font-weight: 700; }
+.yield-strip small { font-size: 11.5px; }
+.card-head { padding: 12px 14px; }
+.card-head h3 { font-size: 18px; }
+.select { font-size: 13px; height: 32px; }
+.check { font-size: 13px; }
+.positions-list { padding: 4px; }
+.position-card { margin: 5px; }
+.pos-head { padding: 10px 12px 8px; }
+.pos-id strong { font-size: 15px; }
+.pos-id span { font-size: 12px; }
+.badge { font-size: 11.5px; padding: 3px 8px; }
+.pos-pnl { font-size: 12.5px; padding: 8px 12px; gap: 4px 14px; }
+.pos-pnl b { font-size: 13.5px; }
+.pos-pnl small { font-size: 11px; }
+.pos-metrics .metric { padding: 10px 12px; }
+.metric-label { font-size: 12.5px; font-weight: 650; }
+.metric-value { font-size: 26px; font-weight: 700; }
+.metric-sub { font-size: 12px; }
+.metric-foot { font-size: 11.5px; }
+.metric-label .sync { font-size: 9.5px; }
+.pos-range { font-size: 11.5px; }
+.rate-line { font-size: 11.5px; }
+.pos-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-top: 1px solid #f0efe9; }
+.pos-actions { display: flex; align-items: center; gap: 7px; padding: 0; border: 0; flex: 1; }
+.pos-actions .btn { height: 31px; font-size: 12.5px; padding: 0 10px; }
+.pos-detail { display: flex; align-items: center; gap: 8px; color: var(--muted-2); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.pos-detail b { color: var(--muted); font-size: 11px; font-weight: 600; }
+.distribution-head { padding: 13px 16px; }
+.distribution-head h3 { font-size: 20px; }
+.distribution-head p { font-size: 13px; }
+.dist-tabs button { font-size: 13px; height: 31px; }
+.distribution-main { padding: 13px 16px 12px; }
+.distribution-price span { font-size: 13px; }
+.distribution-price strong { font-size: 25px; }
+.distribution-price em { font-size: 12px; }
+.distribution-price b { font-size: 12.5px; }
+.distribution-chart { height: 210px; }
+.distribution-axis { font-size: 12px; }
+.distribution-stats { padding: 14px 16px; }
+.distribution-stats h4 { font-size: 18px; }
+.dist-stat { padding: 7px 0; }
+.dist-stat span { font-size: 13px; }
+.dist-stat b { font-size: 14px; }
+.dist-legend { font-size: 11.5px; }
+.liquidity-table { margin-top: 12px; }
+.liq-table-head, .liq-table-row { grid-template-columns: minmax(0,1fr) 68px 92px; padding: 9px 12px; }
+.liq-table-head { font-size: 12px; }
+.liq-table-row { font-size: 13px; }
+.liq-table-row b { font-size: 13px; }
+.liq-table-row em { font-size: 12px; }
+.hype-cell { padding: 12px 14px; }
+.hype-cell > span { font-size: 13px; }
+.hype-cell > strong { font-size: 25px; }
+.hype-cell > small { font-size: 11.5px; }
+.hype-card .card-head small { font-size: 11.5px; }
+@media (max-width: 900px) {
+  .pos-footer { align-items: flex-start; flex-direction: column; }
+  .pos-detail { white-space: normal; }
+  .distribution-chart { height: 190px; }
+}
+@media (max-width: 620px) {
+  body { font-size: 16px; }
+  .summary-strip strong, .pnl-strip strong { font-size: 21px; }
+  .yield-strip strong { font-size: 19px; }
+  .metric-value { font-size: 23px; }
+  .distribution-price strong { font-size: 22px; }
+  .hype-cell > strong { font-size: 21px; }
+}
+.badge { font-size: 12px; }
+.metric-label .sync { font-size: 10.5px; }
+.pos-pnl small { font-size: 11.5px; }
+.pos-detail { font-size: 12px; }
+.pos-detail b { font-size: 12px; }
+.pos-metrics { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 900px) {
+  .pos-metrics { grid-template-columns: 1fr 1fr; }
+  .pos-metrics .metric:nth-child(3) { grid-column: auto; border-left: 0; border-top: 1px solid #f0efe9; }
+  .pos-metrics .metric:nth-child(4) { border-top: 1px solid #f0efe9; }
+}
+
+/* Wider laptop layout: use the screen instead of leaving side gutters. */
+.container { max-width: 1280px; padding-left: 16px; padding-right: 16px; }

@@ -64,6 +64,31 @@ READ_METHODS = {
 }
 BLOCKED_METHOD_PREFIXES = ("admin_", "personal_", "miner_", "debug_", "txpool_")
 MAX_BODY_BYTES = 512 * 1024
+CLAIMS_FILE = Path(os.environ.get("CLAIMS_FILE", str(Path.home() / ".elysium-lp-claims.json")))
+CLAIMS_LOCK = threading.Lock()
+
+
+def _load_claims() -> dict[str, Any]:
+    try:
+        with CLAIMS_FILE.open("r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_claims(claims: dict[str, Any]) -> None:
+    CLAIMS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CLAIMS_FILE.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(claims, handle, ensure_ascii=False, separators=(",", ":"))
+    os.chmod(tmp, 0o600)
+    tmp.replace(CLAIMS_FILE)
+
+
+def _owner_claims(owner: str) -> dict[str, Any]:
+    with CLAIMS_LOCK:
+        return _load_claims().get(owner.lower(), {})
 
 
 def utc_now_iso() -> str:
@@ -519,8 +544,10 @@ class LocalHandler(BaseHTTPRequestHandler):
             cache = "no-cache"
         elif "vendor" in path.parts:
             cache = "public, max-age=31536000, immutable"
-        elif suffix in (".js", ".css"):
-            cache = "public, max-age=300"
+        elif suffix == ".js":
+            cache = "no-cache"
+        elif suffix == ".css":
+            cache = "no-cache"
         elif suffix in (".png", ".svg", ".ico"):
             cache = "public, max-age=604800"
         else:
@@ -556,6 +583,14 @@ class LocalHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self._normalized_path(self.path)
+        if path == "/api/claims":
+            query = parse_qs(urlparse(self.path).query)
+            owner = (query.get("owner") or [""])[0].strip()
+            if not ADDRESS_RE.match(owner):
+                self._send_json({"error": "valid owner required"}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"owner": owner.lower(), "claims": _owner_claims(owner)})
+            return
         if path == "/api/config":
             self._send_json(public_config(self.server.state.config))
             return
@@ -590,10 +625,88 @@ class LocalHandler(BaseHTTPRequestHandler):
         if path == "/api/rpc":
             self._handle_rpc()
             return
+        if path == "/api/claim":
+            self._handle_claim()
+            return
+        if path == "/api/claim/clear":
+            self._handle_claim_clear()
+            return
         if path == "/api/market/refresh":
             self._send_json(self.server.state.market.get(force=True))
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def _handle_claim(self) -> None:
+        raw = self._read_body()
+        if raw is None:
+            return
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid json"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            owner = str(payload.get("owner", "")).lower()
+            token_id = str(payload.get("tokenId", "")).strip()
+            amount0 = float(payload.get("amount0") or 0)
+            amount1 = float(payload.get("amount1") or 0)
+            usd = float(payload.get("usd") or 0)
+            tx_hash = str(payload.get("txHash") or "")
+            if not ADDRESS_RE.match(owner) or not token_id.isdigit() or len(token_id) > 78:
+                raise ValueError("owner or tokenId invalid")
+            if not all(map(lambda n: 0 <= n < 1e15, (amount0, amount1, usd))):
+                raise ValueError("amounts invalid")
+            if tx_hash and not re.match(r"^0x[0-9a-fA-F]{64}$", tx_hash):
+                raise ValueError("txHash invalid")
+        except (TypeError, ValueError) as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+        with CLAIMS_LOCK:
+            claims = _load_claims()
+            owner_map = claims.setdefault(owner, {})
+            entry = owner_map.get(token_id) or {"amount0": 0.0, "amount1": 0.0, "usd": 0.0, "count": 0}
+            entry["amount0"] = round(float(entry.get("amount0") or 0) + amount0, 18)
+            entry["amount1"] = round(float(entry.get("amount1") or 0) + amount1, 18)
+            entry["usd"] = round(float(entry.get("usd") or 0) + usd, 8)
+            entry["count"] = int(entry.get("count") or 0) + 1
+            entry["at"] = utc_now_iso()
+            if tx_hash:
+                entry["txHash"] = tx_hash
+            owner_map[token_id] = entry
+            try:
+                _save_claims(claims)
+            except OSError as error:
+                self._send_json({"error": "claims store unavailable", "detail": str(error)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+        self._send_json({"ok": True, "owner": owner, "tokenId": token_id, "claim": entry})
+
+    def _handle_claim_clear(self) -> None:
+        raw = self._read_body()
+        if raw is None:
+            return
+        try:
+            payload = json.loads(raw)
+            owner = str(payload.get("owner", "")).lower()
+            token_id = str(payload.get("tokenId", "")).strip()
+            if not ADDRESS_RE.match(owner) or not token_id.isdigit():
+                raise ValueError("owner or tokenId invalid")
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+        with CLAIMS_LOCK:
+            claims = _load_claims()
+            owner_map = claims.get(owner, {})
+            owner_map.pop(token_id, None)
+            if owner_map:
+                claims[owner] = owner_map
+            else:
+                claims.pop(owner, None)
+            try:
+                _save_claims(claims)
+            except OSError as error:
+                self._send_json({"error": "claims store unavailable", "detail": str(error)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+        self._send_json({"ok": True, "owner": owner, "tokenId": token_id})
 
     def _serve_static(self, path: str) -> None:
         if path in ("", "/"):

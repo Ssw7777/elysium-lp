@@ -23,6 +23,7 @@
     'balanceHype', 'balanceKntq', 'kntqUsdBalance', 'marketPrice', 'marketAge', 'poolPrice',
     'sumPrincipal', 'sumPrincipalTokens', 'sumFees', 'sumFeesTokens', 'sumApr', 'sumPositions', 'sumEmpty',
     'hourApr', 'dayYield', 'shortApr', 'totalEntry', 'totalCurrent', 'totalPnl', 'totalPnlPct',
+    'hypeEly', 'hypeLp', 'hypeHyper', 'hypeTotal', 'hypeMeta', 'hypeRefBadge',
     'sortSelect', 'hideClosed', 'positionsGrid', 'rangeNotice', 'positionsEmpty', 'emptyComposeBtn', 'composer',
     'hypeInput', 'kntqInput', 'maxHypeBtn', 'maxKntqBtn', 'amountUsd', 'amountRatio',
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
@@ -54,6 +55,7 @@
     wallet: { address: null, chainId: null, provider: null, signer: null, connecting: false, readOnly: false },
     pool: null,
     balances: { hype: 0n, kntq: 0n },
+    hyperEvmHype: null,
     positions: [],
     hiddenEmpty: 0,
     lastReadAt: 0,
@@ -73,6 +75,7 @@
     hideClosed: readStorage('hide-closed') !== '0',
     positionIds: loadJson(STORAGE_PREFIX + 'position-ids', {}),
     entryCache: loadJson(STORAGE_PREFIX + 'entry-cache', {}),
+    claims: {},
     forceLogs: false,
     modal: { onConfirm: null, busy: false }
   };
@@ -124,7 +127,7 @@
     if (v < 0.0001) return v.toPrecision(4);
     return fmtNum(v, digits == null ? 5 : digits);
   }
-  function fmtPct(v) { if (v == null || !Number.isFinite(v)) return '观测中'; if (Math.abs(v) >= 9999) return '>9,999%'; return fmtNum(v, v < 10 ? 2 : 1) + '%'; }
+  function fmtPct(v) { if (v == null || !Number.isFinite(v)) return '观测中'; return fmtNum(v, Math.abs(v) < 10 ? 2 : 1) + '%'; }
   function fmtBps(v) { return fmtNum(Number(v) / 100, 2) + '%'; }
   function fmtAge(sec) { if (sec == null || !Number.isFinite(sec)) return '—'; if (sec < 5) return '刚刚'; if (sec < 60) return Math.floor(sec) + ' 秒前'; if (sec < 3600) return Math.floor(sec / 60) + ' 分钟前'; return Math.floor(sec / 3600) + ' 小时前'; }
   function parseUnitsSafe(v, decimals) { const t = String(v == null ? '' : v).trim(); if (!/^\d*(?:\.\d*)?$/.test(t) || t === '' || t === '.') return 0n; try { return ethers.parseUnits(t, decimals || 18); } catch (_) { return 0n; } }
@@ -158,6 +161,60 @@
     return payload;
   }
 
+  function claimsStorageKey(owner) {
+    return STORAGE_PREFIX + 'claims:' + String(owner || '').toLowerCase();
+  }
+
+  async function loadClaims() {
+    const owner = state.wallet.address;
+    if (!owner) { state.claims = {}; return; }
+    const local = loadJson(claimsStorageKey(owner), {});
+    try {
+      const response = await fetch('api/claims?owner=' + encodeURIComponent(owner), { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      const server = payload && payload.claims && typeof payload.claims === 'object' ? payload.claims : {};
+      const merged = Object.assign({}, local, server);
+      for (const [id, row] of Object.entries(local)) {
+        if (!merged[id] || Number(row.usd || 0) > Number(merged[id].usd || 0)) merged[id] = row;
+      }
+      state.claims = merged;
+      saveJson(claimsStorageKey(owner), merged);
+    } catch (_) {
+      state.claims = local;
+    }
+  }
+
+  async function recordClaim(position, txHash) {
+    const owner = state.wallet.address;
+    if (!owner) return;
+    const amount0 = Number(ethers.formatUnits(position.fees0, 18));
+    const amount1 = Number(ethers.formatUnits(position.fees1, 18));
+    const usd = Number(position.feesUsd || 0);
+    if (!(usd > 0) && amount0 <= 0 && amount1 <= 0) return;
+    try {
+      const response = await fetch('api/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ owner, tokenId: String(position.tokenId), amount0, amount1, usd, txHash: txHash || '' }) });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if (payload.claim) state.claims[String(position.tokenId)] = payload.claim;
+    } catch (_) {
+      const prev = state.claims[String(position.tokenId)] || {};
+      state.claims[String(position.tokenId)] = { amount0: Number(prev.amount0 || 0) + amount0, amount1: Number(prev.amount1 || 0) + amount1, usd: Number(prev.usd || 0) + usd, count: Number(prev.count || 0) + 1, at: new Date().toISOString(), txHash: txHash || prev.txHash || '' };
+      toast('已领取，记录待同步', '服务器记录失败，本机已保留。', 'error');
+    }
+    saveJson(claimsStorageKey(owner), state.claims);
+  }
+
+  async function clearClaim(tokenId) {
+    const owner = state.wallet.address;
+    if (!owner) return;
+    delete state.claims[String(tokenId)];
+    saveJson(claimsStorageKey(owner), state.claims);
+    try {
+      await fetch('api/claim/clear', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ owner, tokenId: String(tokenId) }) });
+    } catch (_) { /* local cleanup still applies */ }
+  }
+
   async function loadConfig() {
     const config = await fetchJson('api/config');
     state.config = config;
@@ -172,6 +229,7 @@
       state.compose.slippagePct = Number(ui.slippageInput.value);
     }
     ui.hideClosed.checked = state.hideClosed;
+    if (ui.hypeRefBadge) { const ref = Number(config.ui?.hypeReference || 0); ui.hypeRefBadge.textContent = ref > 0 ? '参考 ' + fmtNum(ref, 2) : 'HYPE 本位'; }
     ui.sortSelect.value = state.sort;
     const watchAddress = config.ui?.defaultAddress;
     if (watchAddress) {
@@ -264,7 +322,7 @@
 
   function updateWalletUi() {
     const connected = !!state.wallet.address;
-    if (ui.connectBtn) ui.connectBtn.textContent = connected ? (state.wallet.readOnly ? shortAddress(state.wallet.address) : '钱包已连接') : '连接钱包';
+    if (ui.connectBtn) ui.connectBtn.textContent = connected ? shortAddress(state.wallet.address) : '连接钱包';
     if (ui.walletAddress) {
       ui.walletAddress.textContent = connected ? shortAddress(state.wallet.address) : '未连接';
       ui.walletAddress.title = connected ? state.wallet.address : '';
@@ -488,6 +546,53 @@
     return { hype: BigInt(res[0].result), kntq: iface.erc20.decodeFunctionResult('balanceOf', res[1].result)[0] };
   }
 
+  async function readHyperEvmBalance() {
+    const url = state.config.ui?.hyperEvmRpc || 'https://rpc.hyperliquid.xyz/evm';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getBalance', params: [state.wallet.address, 'latest'] }),
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error('HyperEVM HTTP ' + response.status);
+      const payload = await response.json();
+      if (!payload || payload.error || typeof payload.result !== 'string') throw new Error('HyperEVM balance failed');
+      return BigInt(payload.result);
+    } finally { clearTimeout(timer); }
+  }
+
+  function updateHypeUi() {
+    if (!ui.hypeEly) return;
+    const ref = Number(state.config?.ui?.hypeReference || 0);
+    if (ui.hypeRefBadge) ui.hypeRefBadge.textContent = ref > 0 ? '参考 ' + fmtNum(ref, 2) : '实时';
+    const active = state.positions.filter((p) => !p.closed);
+    const lpUsd = active.reduce((sum, p) => sum + (p.principalUsd || 0), 0);
+    const hypeUsd = state.market?.price;
+    const connected = !!state.wallet.address;
+    const ely = connected ? Number(ethers.formatUnits(state.balances.hype, 18)) : null;
+    const hyper = state.hyperEvmHype == null ? null : Number(ethers.formatUnits(state.hyperEvmHype, 18));
+    const lp = hypeUsd > 0 ? lpUsd / hypeUsd : null;
+    const total = ely == null || hyper == null || lp == null ? null : ely + hyper + lp;
+    ui.hypeEly.textContent = ely == null ? '—' : fmtNum(ely, 5);
+    ui.hypeLp.textContent = lp == null ? '—' : fmtNum(lp, 4);
+    ui.hypeHyper.textContent = hyper == null ? '—' : fmtNum(hyper, 5);
+    ui.hypeTotal.textContent = total == null ? '—' : fmtNum(total, 4);
+    ui.hypeTotal.classList.toggle('negative', total != null && ref > 0 && total < ref);
+    if (!connected) {
+      ui.hypeMeta.textContent = '连接钱包后计算';
+    } else if (total == null) {
+      ui.hypeMeta.textContent = 'HyperEVM 或行情暂不可用';
+    } else if (ref > 0) {
+      const delta = total - ref;
+      ui.hypeMeta.textContent = '参考转入 ' + fmtNum(ref, 2) + ' HYPE · 差额 ' + (delta >= 0 ? '+' : '') + fmtNum(delta, 4) + ' HYPE';
+    } else {
+      ui.hypeMeta.textContent = 'HYPE 本位合计';
+    }
+  }
+
   async function getLogsChunked(filter, chunkSize) {
     const size = Number(chunkSize || 100000);
     const from = Number(BigInt(filter.fromBlock));
@@ -524,9 +629,13 @@
     const pm = getAddress(cfg.uniswap.positionManager);
     const cacheKey = owner.toLowerCase();
     const cached = state.positionIds[cacheKey];
+    let balance = null;
+    try {
+      balance = Number(BigInt(await ethCall(pm, callData(iface.pm, 'balanceOf', [owner]))));
+    } catch (_) { /* cache fallback */ }
     let ids = [];
     let mintBlocks = new Map();
-    if (cached && Date.now() - cached.at < 10 * 60 * 1000 && !state.forceLogs) {
+    if (cached && balance != null && Number(cached.balance) === balance && Date.now() - cached.at < 2 * 60 * 1000 && !state.forceLogs) {
       ids = (cached.ids || []).map((id) => BigInt(id));
       mintBlocks = new Map(Object.entries(cached.mintBlocks || {}).map(([k, v]) => [k, Number(v)]));
     } else {
@@ -543,7 +652,7 @@
         if (String(log.topics[1]).toLowerCase() === '0x' + '0'.repeat(64)) mintBlocks.set(id, Number(BigInt(log.blockNumber)));
         if (!seen.has(id)) { seen.add(id); ids.push(BigInt(id)); }
       }
-      state.positionIds[cacheKey] = { ids: ids.map(String), mintBlocks: Object.fromEntries(mintBlocks), at: Date.now() };
+      state.positionIds[cacheKey] = { ids: ids.map(String), mintBlocks: Object.fromEntries(mintBlocks), balance, at: Date.now() };
       saveJson(STORAGE_PREFIX + 'position-ids', state.positionIds);
       state.forceLogs = false;
     }
@@ -618,6 +727,11 @@
     if (!(currentHype > 0) || !(currentK > 0)) return;
     const stateView = getAddress(state.config.uniswap.stateView);
     for (const p of positions) {
+      const claim = state.claims[String(p.tokenId)] || {};
+      p.claimedUsd = Number(claim.usd || 0);
+      p.claimedCount = Number(claim.count || 0);
+      p.claimed0 = Number(claim.amount0 || 0);
+      p.claimed1 = Number(claim.amount1 || 0);
       if (!p.mintBlock || p.principalUsd == null) continue;
       const cacheKey = p.tokenId.toString() + ':' + p.mintBlock;
       let entry = state.entryCache[cacheKey];
@@ -661,7 +775,7 @@
       }
       p.entry = entry;
       p.entryValueUsd = entry.valueUsd;
-      p.currentValueUsd = p.principalUsd + (p.feesUsd || 0);
+      p.currentValueUsd = p.principalUsd + (p.feesUsd || 0) + (p.claimedUsd || 0);
       p.pnlUsd = p.currentValueUsd - entry.valueUsd;
       p.pnlPct = entry.valueUsd > 0 ? p.pnlUsd / entry.valueUsd * 100 : null;
       p.entryAgeSec = Math.max(0, block.timestamp - entry.mintTs);
@@ -803,6 +917,8 @@
       let hidden = 0;
       if (state.wallet.address && state.wallet.chainId === Number(state.config.network.chainId)) {
         balances = await readBalances();
+        await loadClaims();
+        try { state.hyperEvmHype = await readHyperEvmBalance(); } catch (_) { state.hyperEvmHype = null; }
         const result = await readPositions(block);
         positions = result.positions;
         hidden = result.hidden;
@@ -815,6 +931,7 @@
         updateWalletUi();
         renderPositions();
         updateSummary();
+        updateHypeUi();
         updateStaleUi();
         await attachApr(positions, block);
       }
@@ -830,6 +947,7 @@
       updateWalletUi();
       renderPositions();
       updateSummary();
+      updateHypeUi();
       updateComposeUi();
       updateStaleUi();
       scheduleQuote(true);
@@ -857,6 +975,8 @@
       await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: cfg.chainIdHex }] });
     } catch (error) {
       if (Number(error.code) !== 4902) throw error;
+      const isOkx = !!window.okxwallet || !!window.ethereum?.isOkxWallet || /OKX/i.test(navigator.userAgent);
+      if (isOkx) throw new Error('OKX 内置 Elysium 主网未找到，请在 OKX 网络列表选择 Elysium（99901），不要新增自定义网络');
       await window.ethereum.request({
         method: 'wallet_addEthereumChain',
         params: [{
@@ -894,6 +1014,7 @@
       if (!accounts?.length) throw new Error('钱包没有返回账户');
       await ensureWalletChain(true);
       state.wallet.address = getAddress(accounts[0]);
+      state.wallet.readOnly = false;
       state.apr.clear();
       state.forceLogs = true;
       await setupProvider();
@@ -911,8 +1032,10 @@
   }
 
   function disconnectWallet() {
-    state.wallet = { address: null, chainId: null, provider: null, signer: null, connecting: false };
+    state.wallet = { address: null, chainId: null, provider: null, signer: null, connecting: false, readOnly: false };
     state.balances = { hype: 0n, kntq: 0n };
+    state.hyperEvmHype = null;
+    state.claims = {};
     state.positions = [];
     state.apr.clear();
     updateWalletUi();
@@ -1125,12 +1248,11 @@
     return '' +
       '<article class="position-card ' + (p.closed ? 'empty' : p.inRange ? 'in-range' : 'out-of-range') + '" data-token-id="' + p.tokenId + '">' +
         '<div class="pos-head"><div class="pos-id"><strong>#' + p.tokenId + '</strong><span class="pair">KNTQ / HYPE</span></div><span class="badge ' + statusClass + '">' + status + '</span></div>' +
-        '<div class="price-strip"><span class="price">KNTQ ' + (k == null ? '$—' : fmtUsd(k, { digits: 4 })) + '</span><span class="usd">HYPE ' + (state.market?.price ? fmtUsd(state.market.price, { digits: 2 }) : '$—') + '</span></div>' +
         '<div class="pos-pnl">' +
           '<span>投入 ' + (p.entryValueUsd == null ? '—' : (p.entry?.estimated ? '≈' : '') + fmtUsd(p.entryValueUsd)) + '</span>' +
           '<span>当前 ' + (p.currentValueUsd == null ? '—' : fmtUsd(p.currentValueUsd)) + '</span>' +
           '<b class="' + (p.pnlUsd == null ? '' : p.pnlUsd >= 0 ? 'pnl-up' : 'pnl-down') + '">PNL ' + (p.pnlUsd == null ? '—' : fmtSignedUsd(p.pnlUsd)) + (p.pnlPct == null ? '' : ' (' + (p.pnlPct >= 0 ? '+' : '') + fmtNum(p.pnlPct, 2) + '%)') + '</b>' +
-          '<small>' + (p.entry ? '建仓 KNTQ ' + fmtUsd(p.entry.kntqAt, { digits: 4 }) + ' · 当前 ' + (k == null ? '$—' : fmtUsd(k, { digits: 4 })) + ' · ' : '') + (p.ilUsd == null ? '含待领手续费' : '含待领 · IL ' + fmtSignedUsd(p.ilUsd)) + (p.entry?.estimated ? ' · 估算' : '') + '</small>' +
+          '<small>' + (p.entry ? '建仓 KNTQ ' + fmtUsd(p.entry.kntqAt, { digits: 4 }) + ' · 当前 ' + (k == null ? '$—' : fmtUsd(k, { digits: 4 })) + ' · ' : '') + (p.ilUsd == null ? '含待领手续费' : '含待领 · IL ' + fmtSignedUsd(p.ilUsd)) + (p.claimedUsd > 0 ? ' · 已领 ' + fmtUsd(p.claimedUsd) : '') + (p.entry?.estimated ? ' · 估算' : '') + '</small>' +
         '</div>' +
         '<div class="pos-metrics">' +
           '<div class="metric"><div class="metric-label"><span>本金 · 当前估值</span><span>' + (p.inRange ? 'IN RANGE' : 'OUT') + '</span></div>' +
@@ -1141,7 +1263,12 @@
           '<div class="metric"><div class="metric-label"><span>待领收益</span><span class="sync">链上 fee growth</span></div>' +
             '<strong class="metric-value ' + (p.feesUsd > 0 ? 'positive' : 'muted') + '">' + (p.feesUsd == null ? '$—' : fmtUsd(p.feesUsd)) + '</strong>' +
             '<span class="metric-sub">' + fmtToken(p.fees0, 18, 6) + ' HYPE + ' + fmtToken(p.fees1, 18, 5) + ' KNTQ</span>' +
-            '<div class="metric-foot"><span>不包含本金 · 领取时以链上为准</span></div>' +
+            '<div class="metric-foot"><span>领取时以链上为准</span></div>' +
+          '</div>' +
+          '<div class="metric"><div class="metric-label"><span>已领取收益</span><span class="sync">累计</span></div>' +
+            '<strong class="metric-value ' + (p.claimedUsd > 0 ? 'positive' : 'muted') + '">' + (p.claimedUsd > 0 ? fmtUsd(p.claimedUsd) : '$0.00') + '</strong>' +
+            '<span class="metric-sub">' + (p.claimedCount > 0 ? '已领 ' + p.claimedCount + ' 次' : '尚未领取') + '</span>' +
+            '<div class="metric-foot"><span>计入 PNL · 100% 撤池后清除</span></div>' +
           '</div>' +
           '<div class="metric"><div class="metric-label"><span>预估年化</span><span>' + (p.aprWindow || '估算中') + '</span></div>' +
             '<strong class="metric-value ' + (p.apr > 0 ? 'positive' : 'muted') + '">' + (p.apr == null ? '—' : fmtPct(p.apr)) + '</strong>' +
@@ -1150,14 +1277,16 @@
           '</div>' +
         '</div>' +
         (stale ? '<div class="card-stale">数据过期，正在自动重试；交易暂时锁定。</div>' : '') +
-        '<div class="pos-actions">' +
-          (state.wallet.readOnly
-            ? '<span class="metric-sub">只读看板 · 手机端无需连接钱包</span>'
-            : ((p.fees0 > 0n || p.fees1 > 0n) ? '<button class="btn small" data-action="claim" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>提取手续费</button>' : '') +
-              ((!p.closed && p.liquidity > 0n) ? '<button class="btn small primary" data-action="withdraw" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>撤池</button>' : '') +
-              (p.closed ? '<span class="metric-sub">已隐藏空仓 · 仍可领取剩余手续费</span>' : '')) +
+        '<div class="pos-footer">' +
+          '<div class="pos-actions">' +
+            (state.wallet.readOnly
+              ? '<span class="metric-sub">只读看板 · 连接钱包后可操作</span>'
+              : ((p.fees0 > 0n || p.fees1 > 0n) ? '<button class="btn small" data-action="claim" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>提取手续费</button>' : '') +
+                ((!p.closed && p.liquidity > 0n) ? '<button class="btn small primary" data-action="withdraw" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>撤池</button>' : '') +
+                (p.closed ? '<span class="metric-sub">已隐藏空仓 · 仍可领取剩余手续费</span>' : '')) +
+          '</div>' +
+          '<div class="pos-detail"><span>NFT #' + p.tokenId + (p.entryAgeSec == null ? '' : ' · 持仓 ' + M.formatDuration(p.entryAgeSec)) + '</span><b>1.00%</b></div>' +
         '</div>' +
-        '<div class="detail-row" style="padding:0 13px 10px;border:0"><span>NFT #' + p.tokenId + (p.entryAgeSec == null ? '' : ' · 持仓 ' + M.formatDuration(p.entryAgeSec)) + '</span><b>1.00%</b></div>' +
       '</article>';
   }
 
@@ -1242,7 +1371,7 @@
     ui.totalCurrent.textContent = active.length ? fmtUsd(totalCurrent) : '$—';
     ui.totalPnl.textContent = totalPnl == null ? '—' : fmtSignedUsd(totalPnl);
     ui.totalPnl.className = totalPnl == null ? '' : totalPnl >= 0 ? 'gain' : 'loss';
-    ui.totalPnlPct.textContent = totalPnl == null || !(totalEntry > 0) ? '含待领 · 未实现' : (totalPnl >= 0 ? '+' : '') + fmtNum(totalPnl / totalEntry * 100, 2) + '% · 含待领';
+    ui.totalPnlPct.textContent = totalPnl == null || !(totalEntry > 0) ? '含待领/已领 · 未实现' : (totalPnl >= 0 ? '+' : '') + fmtNum(totalPnl / totalEntry * 100, 2) + '% · 含待领/已领';
   }
 
   const CHART_TF = {
@@ -1595,12 +1724,24 @@
     });
   }
 
+  async function assertLiveWalletChain() {
+    if (!state.wallet.provider) throw new Error('钱包未连接');
+    const hex = await state.wallet.provider.send('eth_chainId', []);
+    const live = Number(BigInt(hex));
+    if (live !== Number(state.config.network.chainId)) {
+      state.wallet.chainId = live;
+      updateWalletUi();
+      throw new Error('钱包当前网络不是 Elysium 99901，已停止签名；请切换网络后重试');
+    }
+  }
+
   async function executeSteps(steps, onProgress) {
     if (!state.wallet.signer || !state.wallet.address) throw new Error('钱包未连接');
     if (state.wallet.chainId !== Number(state.config.network.chainId)) throw new Error('钱包网络不正确');
     for (let i = 0; i < steps.length; i += 1) {
       const step = steps[i];
       if (txBlocked()) throw new Error('链上数据已过期，请刷新后重新预览');
+      await assertLiveWalletChain();
       if (onProgress) onProgress(step, i, 'simulating');
       await simulateStep(step);
       if (onProgress) onProgress(step, i, 'signing');
@@ -1682,13 +1823,17 @@
       body: '<div class="preview-grid"><div class="preview-item"><span>HYPE</span><strong>' + fmtToken(position.fees0, 18, 6) + '</strong></div><div class="preview-item"><span>KNTQ</span><strong>' + fmtToken(position.fees1, 18, 5) + '</strong></div><div class="preview-item"><span>估值</span><strong>' + fmtUsd(position.feesUsd) + '</strong></div><div class="preview-item"><span>接收地址</span><strong>' + shortAddress(state.wallet.address) + '</strong></div></div><div class="warning-box">DECREASE_LIQUIDITY(0) + TAKE_PAIR，只领取手续费，不动本金。领取金额以执行时链上 fee growth 为准。</div><div class="preview-section"><h4>执行步骤</h4><div class="preview-list">' + planStepHtml(step, 0) + '</div></div>',
       confirmText: '模拟并领取',
       onConfirm: async () => {
-        await executeSteps([step], (s, i, phase) => {
+        let txHash = null;
+        await executeSteps([step], (s, i, phase, hash) => {
+          if (hash) txHash = hash;
           if (phase === 'simulating') setStepState('claim', '模拟中…', 'pending');
           if (phase === 'signing') setStepState('claim', '模拟通过 · 请在钱包确认', 'pending');
           if (phase === 'sent') setStepState('claim', '已发送，等待确认', 'pending');
           if (phase === 'confirmed') setStepState('claim', '已确认', '');
         });
-        toast('手续费已领取', '已刷新持仓。', 'success'); closeModal(true); await refreshAll();
+        await recordClaim(position, txHash);
+        toast('手续费已领取', '已记录已领 ' + fmtUsd(position.feesUsd) + '，PNL 会继续包含这笔。', 'success');
+        closeModal(true); await refreshAll();
       }
     });
   }
@@ -1709,9 +1854,9 @@
 
   function openWithdraw(position) {
     if (txBlocked()) { toast('数据过期', '刷新后再撤池。', 'error'); return; }
-    const slipPct = parseFloatSafe(ui.slippageInput.value);
-    const slip = Math.max(1, Math.round(slipPct * 100));
-    if (!(slipPct > 0) || slipPct > Number(state.config.safety.maxSlippageBps || 300) / 100) { toast('滑点无效', '请填写 0.01%–5% 的滑点。', 'error'); return; }
+    const slipPct = 1;
+    const slip = 100;
+    if (!(slipPct > 0) || slipPct > Number(state.config.safety.maxSlippageBps || 500) / 100) { toast('撤池滑点设置无效', '请联系维护者。', 'error'); return; }
     if (!(position.liquidity > 0n)) { toast('该仓位没有流动性', '可能已撤出。'); return; }
     let percent = 100;
     const render = () => {
@@ -1733,7 +1878,8 @@
           if (phase === 'sent') setStepState('withdraw', '已发送，等待确认', 'pending');
           if (phase === 'confirmed') setStepState('withdraw', '已确认', '');
         });
-        toast('撤池完成', percent === 100 ? '仓位已变为空仓；空仓默认隐藏。' : '已撤出 ' + percent + '%。', 'success');
+        if (percent >= 100) await clearClaim(position.tokenId);
+        toast('撤池完成', percent === 100 ? '仓位已变为空仓；已领手续费记录已清除。' : '已撤出 ' + percent + '%。', 'success');
         closeModal(true); await refreshAll();
       }
     });
@@ -1748,8 +1894,8 @@
       eyebrow: 'WALLET', title: readOnly ? '只读地址' : '钱包与网络',
       body: '<div class="preview-grid"><div class="preview-item"><span>账户</span><strong>' + escapeHtml(state.wallet.address) + '</strong></div><div class="preview-item"><span>模式</span><strong class="' + (readOnly ? 'gain' : '') + '">' + (readOnly ? '只读看板' : '浏览器钱包') + '</strong></div><div class="preview-item"><span>网络</span><strong class="' + (chainOk ? 'gain' : '') + '">' + (chainOk ? state.config.network.name : 'chainId ' + state.wallet.chainId + '（不匹配）') + '</strong></div><div class="preview-item"><span>HYPE</span><strong>' + fmtToken(state.balances.hype, 18, 5) + '</strong></div><div class="preview-item"><span>KNTQ</span><strong>' + fmtToken(state.balances.kntq, 18, 5) + '</strong></div><div class="preview-item"><span>Elysium V4 仓位</span><strong>' + state.positions.length + '</strong></div></div>' +
         '<div class="warning-box">' + (readOnly ? '手机看板默认读取这个地址，不连接钱包、不签名。' : '工具只读取公开链上数据；签名始终在钱包内完成。断开只清除本页面连接状态，不会撤销钱包授权。') + '</div>',
-      confirmText: readOnly ? '关闭' : '断开界面连接',
-      onConfirm: async () => { if (readOnly) { closeModal(true); return; } disconnectWallet(); closeModal(true); }
+      confirmText: readOnly ? '连接钱包' : '断开界面连接',
+      onConfirm: async () => { if (readOnly) { closeModal(true); await connectWallet(); return; } disconnectWallet(); closeModal(true); }
     });
   }
 
@@ -1778,6 +1924,22 @@
       state.retryTimer = null;
       poll().catch(() => scheduleRetry());
     }, 10000);
+  }
+
+  async function checkPositionBalance() {
+    if (document.hidden || state.refreshing || !state.wallet.address) return;
+    if (state.wallet.chainId !== Number(state.config.network.chainId)) return;
+    const cached = state.positionIds[state.wallet.address.toLowerCase()];
+    if (!cached || cached.balance == null) return;
+    try {
+      const pm = getAddress(state.config.uniswap.positionManager);
+      const raw = await ethCall(pm, callData(iface.pm, 'balanceOf', [state.wallet.address]));
+      const balance = Number(BigInt(raw));
+      if (balance !== Number(cached.balance)) {
+        state.forceLogs = true;
+        await refreshAll();
+      }
+    } catch (_) { /* next poll */ }
   }
 
   async function poll() {
@@ -1868,6 +2030,7 @@
     updateFooter();
     setInterval(tick, 1000);
     setInterval(poll, Number(state.config.ui.pollSeconds || 12) * 1000);
+    setInterval(checkPositionBalance, 15000);
   }
 
   init();

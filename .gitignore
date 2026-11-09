@@ -29,3 +29,7 @@ Thumbs.db
 *.bak.*
 .tmp/
 logs/
+
+# local claimed-fee journal
+.elysium-lp-claims.json
+data/claims.json

@@ -12,6 +12,7 @@ const OWNER = (process.env.DEFAULT_ADDRESS || CONFIG.ui.defaultAddress || '').tr
 const BARK_KEY = (process.env.BARK_KEY || '').trim();
 const BARK_SERVER = (process.env.BARK_SERVER || 'https://api.day.app').replace(/\/+$/, '');
 const CACHE_FILE = process.env.ENTRY_CACHE || path.join(process.env.HOME || '/tmp', '.elysium-lp-entry-cache.json');
+const CLAIMS_FILE = process.env.CLAIMS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-claims.json');
 
 const ABI = {
   pm: [
@@ -35,6 +36,10 @@ function feeFromGrowth(liquidity, current, last) {
   if (liquidity <= 0n) return 0n;
   const delta = (current - last + (1n << 256n)) % (1n << 256n);
   return (liquidity * delta) >> 128n;
+}
+
+function loadClaims() {
+  try { return JSON.parse(fs.readFileSync(CLAIMS_FILE, 'utf8')); } catch (_) { return {}; }
 }
 
 function loadCache() {
@@ -173,6 +178,7 @@ async function runReport(rpcUrl) {
 
   const cache = loadCache();
   const rows = [];
+  const claimBook = loadClaims()[OWNER.toLowerCase()] || {};
   for (const id of ids) {
     try {
       let owner;
@@ -225,13 +231,15 @@ async function runReport(rpcUrl) {
           console.log('[entry]', id, String(error.message || error).slice(0, 120));
         }
       }
-      const currentValue = principalUsd == null ? null : principalUsd + (feeUsd || 0);
+      const claim = claimBook[String(id)] || {};
+      const claimedUsd = Number(claim.usd || 0);
+      const currentValue = principalUsd == null ? null : principalUsd + (feeUsd || 0) + claimedUsd;
       const pnl = entry && currentValue != null ? currentValue - entry.valueUsd : null;
       const currentUsd = kntqUsd;
       const lowerUsd = 1 / M.priceFromSqrtX96(M.tickToSqrtRatioX96(upper)) * hypeUsd;
       const upperUsd = 1 / M.priceFromSqrtX96(M.tickToSqrtRatioX96(lower)) * hypeUsd;
       rows.push({
-        id, feeHype, feeKntq, feeUsd, pnl,
+        id, feeHype, feeKntq, feeUsd, pnl, principalUsd, claimedUsd,
         distUp: currentUsd > 0 ? (upperUsd / currentUsd - 1) * 100 : null,
         distDown: currentUsd > 0 ? (currentUsd / lowerUsd - 1) * 100 : null
       });
@@ -244,6 +252,7 @@ async function runReport(rpcUrl) {
   const totalFees = rows.reduce((sum, row) => sum + (row.feeUsd || 0), 0);
   const totalHype = rows.reduce((sum, row) => sum + row.feeHype, 0);
   const totalKntq = rows.reduce((sum, row) => sum + row.feeKntq, 0);
+  const totalClaimed = rows.reduce((sum, row) => sum + (row.claimedUsd || 0), 0);
   const pnlRows = rows.filter((row) => row.pnl != null);
   const totalPnl = pnlRows.length ? pnlRows.reduce((sum, row) => sum + row.pnl, 0) : null;
   const title = rows.length ? `💧 Elysium LP 待领 ${fmtUsd(totalFees)}` : '💧 Elysium LP 待领 $0.00';
@@ -251,6 +260,7 @@ async function runReport(rpcUrl) {
     `目前加上手续费收益净PNL：${totalPnl == null ? '—' : fmtSignedUsd(totalPnl)}`,
     `费用收入${fmtUsd(totalFees)}（${totalHype.toFixed(6)} HYPE + ${totalKntq.toFixed(4)} KNTQ）`
   ];
+  if (totalClaimed > 0) lines.push(`已领手续费 ${fmtUsd(totalClaimed)}（计入PNL）`);
   if (rows.length === 1) {
     const row = rows[0];
     lines.push(`距离上区间 ${row.distUp == null ? '—' : row.distUp.toFixed(1) + '%'}   下区间 ${row.distDown == null ? '—' : row.distDown.toFixed(1) + '%'}`);
@@ -259,6 +269,21 @@ async function runReport(rpcUrl) {
   } else {
     lines.push('距离上区间—  下区间—');
   }
+  let hypeLine = 'HYPE合计 —';
+  try {
+    const elyHype = Number(ethers.formatUnits(await provider.getBalance(OWNER), 18));
+    const hyperHype = Number(ethers.formatUnits(await hyperEvmBalance(OWNER), 18));
+    const lpUsd = rows.reduce((sum, row) => sum + (row.principalUsd || 0), 0);
+    const lpHype = hypeUsd > 0 ? lpUsd / hypeUsd : null;
+    if (lpHype != null) {
+      const totalHype = elyHype + lpHype + hyperHype;
+      const ref = Number(CONFIG.ui?.hypeReference || 0);
+      hypeLine = `HYPE合计 ${totalHype.toFixed(4)}（Elysium ${elyHype.toFixed(4)} + LP ${lpHype.toFixed(4)} + HyperEVM ${hyperHype.toFixed(4)}）` + (ref > 0 ? `｜参考${ref.toFixed(2)}｜${totalHype - ref >= 0 ? '+' : ''}${(totalHype - ref).toFixed(4)}` : '');
+    }
+  } catch (error) {
+    console.log('[hype-total]', String(error.message || error).slice(0, 120));
+  }
+  lines.push(hypeLine);
   lines.push(new Date().toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: 'numeric', day: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
@@ -266,6 +291,18 @@ async function runReport(rpcUrl) {
   console.log(title);
   console.log(lines.join('\n'));
   await postBark(title, lines.join('\n'));
+}
+
+async function hyperEvmBalance(owner) {
+  const response = await fetch('https://rpc.hyperliquid.xyz/evm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getBalance', params: [owner, 'latest'] })
+  });
+  if (!response.ok) throw new Error('HyperEVM HTTP ' + response.status);
+  const payload = await response.json();
+  if (!payload || payload.error || typeof payload.result !== 'string') throw new Error('HyperEVM balance failed');
+  return BigInt(payload.result);
 }
 
 async function main() {

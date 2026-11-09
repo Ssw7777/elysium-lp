@@ -1,49 +1,71 @@
 # Elysium LP Dashboard · 中文
 
-只读的 **Elysium 主网（chainId 99901）KNTQ/HYPE Uniswap V4** 流动性看板。不托管私钥，不发交易。
+**Elysium 主网（chainId 99901）KNTQ/HYPE Uniswap V4** 流动性看板。链上数据只读；领取手续费或撤池时由浏览器钱包签名，服务端不接触私钥。
 
 ## 功能
 
-- 读取真实 V4 池状态与钱包 NFT 仓位。
-- 投入时价值、目前价值、净 PnL、无常损失（IL）、待领手续费。
-- 5m / 30m / 1h 年化，未来 1 天预估收益。
-- Uniswap 风格流动性分布：KNTQ/USDT 价格柱状图、当前价高亮、统计卡、主要区间表。
-- 仓位区间距离、持仓时长、建仓时价格。
-- 手机只读模式：在 `config.json` 的 `ui.defaultAddress` 填入地址，无需连接钱包。
-- 可选 Bark 小时报：待领手续费 + 净 PnL + 区间距离，消息保留。
+- 读取真实 V4 池状态、仓位、tick 与流动性分布。
+- 投入价值、目前价值、净 PnL、无常损失（IL）、待领手续费、**已领取手续费**。
+- 已领取手续费**继续计入 PnL**，直到该仓位 100% 撤池；仓位卡显示累计已领 USD。
+- 5m / 30m / 1h 年化、未来 1 天预估收益，默认 60 秒刷新。
+- Uniswap 风格 KNTQ/USDT 流动性分布、当前价高亮、统计卡和主要区间表。
+- 底部 HYPE 本位小窗口：Elysium 钱包 + LP 本金折合 + HyperEVM 钱包，可选参考 HYPE 数量。
+- 可选浏览器钱包模式：领取手续费 / 撤池；支持 OKX 内置 Elysium 网络，不在 OKX 里自动新增自定义网络。
+- 每 15 秒检查 PositionManager `balanceOf`，发现新仓位后立即重新读取日志。
+- 可选 Bark 定时报告：待领手续费、净 PnL、已领手续费、区间距离、HYPE 合计和时间。
+- 两个 Elysium RPC，自动故障切换。
+
+## 只读与签名
+
+服务端不会索要助记词或私钥，也不会广播交易。只有领取手续费 / 撤池时，浏览器钱包才会签名。没有自动放宽滑点、自动重发或私钥处理。
+
+默认 `ui.defaultAddress` 为空，页面进入连接钱包模式；只有想做手机只读看板时才填入公开地址。
 
 ## 快速开始
 
 ```bash
+git clone https://github.com/Ssw7777/elysium-lp.git
+cd elysium-lp
 python3 server.py --no-open --port 8097
 # 打开 http://127.0.0.1:8097/elysium-lp/
 ```
 
-无需安装第三方 Python 包；浏览器用的 ethers.js 已放在 `public/vendor/`。
+无需第三方 Python 包；ethers.js 已放在 `public/vendor/`。
 
 ## 配置
 
 编辑 `config.json`：
 
-- `network.rpcUrls`：Elysium RPC，官方优先，备用第二。
-- `uniswap`：公开的 V4 合约、PoolId、PoolKey。
-- `ui.defaultAddress`：留空则连接钱包；填地址则移动端只读。
-- `safety`：过期阈值等。
+- `network.rpcUrls`：Elysium 官方 RPC 优先，备用第二。
+- `uniswap.*`：公开的 V4 池、PoolManager、StateView、PositionManager 地址。
+- `ui.defaultAddress`：留空则连接钱包；填地址则只读查看。
+- `ui.hypeReference`：仅作为 HYPE 小窗口的参考数量；填 `0` 隐藏参考。
+- `ui.hyperEvmRpc`：读取 HyperEVM 钱包 HYPE 的 RPC。
+- `safety.*`：过期阈值和显示限制。
 
-不要在这个文件里写私钥、API token、个人服务器信息。
+不要在这个文件里写私钥、交易所 API key、Bark key 或个人服务器信息。
 
-## 数据口径
+## 已领手续费记录
 
-- 仓位：从 PositionManager `Transfer` 日志枚举，`ownerOf` 过滤。
-- V4 position key 必须 packed：
-  `keccak256(abi.encodePacked(positionManager, int24 tickLower, int24 tickUpper, bytes32 tokenId))`
-- 待领手续费：
-  `liquidity * (feeGrowthInside - feeGrowthInsideLast) >> 128`
-- 投入价值：建仓区块的 `getSlot0` + `getPositionLiquidity`，HYPE 历史价用 Hyperliquid 1h K 线。
-- KNTQ/USDT 由 KNTQ/HYPE 池价 × HYPE/USDT 折算，不是独立 KNTQ/USDT 池。
-- 流动性分布：`StateView.getTickBitmap` + `getTickLiquidity`。
+领取交易确认后，前端会把 owner、tokenId、领取的 HYPE/KNTQ、USD 估值和交易哈希提交到 `POST /api/claim`，服务端写入：
 
-## 可选 Bark 小时报
+```text
+~/.elysium-lp-claims.json
+```
+
+`GET /api/claims?owner=0x...` 读取记录。只有 **100% 撤池成功** 才调用 `POST /api/claim/clear` 删除该 token 的记录；部分撤池会保留。
+
+PnL 口径：
+
+```text
+本金 + 待领手续费 + 累计已领手续费 - 建仓价值
+```
+
+这个 journal 本身不含密钥，但仍是私人数据。**把服务放到公网前，务必套一层认证（例如 Caddy `forward_auth`）**，不要把 `/api/claim` 暴露成无认证写接口。
+
+## 可选 Bark 定时报告
+
+`scripts/hourly_report.js` 是可选只读 Node.js 任务。为了兼容保留了文件名；可以按任意间隔运行，例如每 5 分钟：
 
 ```bash
 export BARK_KEY="你的 Bark key"
@@ -51,14 +73,29 @@ export DEFAULT_ADDRESS="0x..."
 node scripts/hourly_report.js
 ```
 
-`isArchive: 1` 会保留消息历史；脚本只读链上数据。
+消息包含待领手续费、净 PnL、已领手续费、区间距离、HYPE 合计和时间。`isArchive: 1` 会保留历史；脚本只读链上数据。
+
+systemd 可用 `OnCalendar=*:0/5` 实现 5 分钟一次。`BARK_KEY` 放在权限 `600` 的 `EnvironmentFile` 里，不要提交到仓库。
+
+## 数据口径
+
+- 仓位：从 PositionManager `Transfer` 日志枚举，`ownerOf` 过滤；用 `balanceOf` 快速发现新仓位。
+- V4 position key：
+  `keccak256(abi.encodePacked(positionManager, int24 tickLower, int24 tickUpper, bytes32 tokenId))`
+- 待领手续费：
+  `liquidity * (feeGrowthInside - feeGrowthInsideLast) >> 128`
+- 投入价值：建仓区块的 `getSlot0` + `getPositionLiquidity`，HYPE 历史价用 Hyperliquid 1h K 线。
+- KNTQ/USDT 由 KNTQ/HYPE 池价 × HYPE/USDT 折算，不是独立 KNTQ/USDT 池。
+- 流动性分布：`StateView.getTickBitmap` + `getTickLiquidity`。
+- HYPE 合计 = Elysium 钱包 HYPE + LP 本金折合 HYPE + HyperEVM（chain 999）钱包 HYPE。待领/已领手续费单独统计。
 
 ## 限制
 
 - 只做 KNTQ/HYPE 单池。
-- PnL 只含待领手续费，不含已领取。
+- 不包含添加流动性功能，请用其他工具。
 - 建仓后加过流动性时，投入价值为估算。
-- 只读；添加流动性请用其他工具。
+- 已领记录从本功能上线后开始保存；直接在其他钱包操作或上线前的领取不会自动回溯。
+- HYPE/USD、KNTQ/USD 是行情估算，不保证成交价。
 
 ## 许可
 
