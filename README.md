@@ -15,6 +15,7 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. On-cha
 - 5m / 30m / 1h APR, next-day estimated yield and a 60-second refresh.
 - Uniswap-style KNTQ/USDT liquidity distribution, current-price highlight, stats and range table.
 - HYPE-denominated strip at the bottom: Elysium wallet + LP principal + HyperEVM wallet, with an optional reference amount.
+- Add-liquidity panel: free input on either side, auto-ratio, range presets/custom range, slippage preview, Permit2 approvals and V4 mint.
 - Optional browser-wallet mode for claiming fees / withdrawing liquidity. OKX Wallet's built-in Elysium network is supported; the app does not create a custom network on OKX.
 - New positions are detected by a 15-second PositionManager `balanceOf` watcher, then a fresh log read.
 - Optional periodic Bark report. The sample job sends pending fees, net PnL, claimed fees, range distance, HYPE total and timestamp; `isArchive: 1` keeps history.

@@ -115,6 +115,51 @@
       </div>
     </section>
 
+    <section class="card build-card" id="buildCard">
+      <div class="card-head"><div><h3>添加流动性</h3><small>KNTQ/HYPE · Uniswap V4 · 1% · 自由输入任意一侧</small></div><span class="fee-badge">V4 · 1%</span></div>
+      <div class="build-body" id="composer">
+        <div class="build-form">
+          <div class="build-inputs">
+            <label class="build-input"><span>HYPE</span><div><input id="hypeInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxHypeBtn" type="button">MAX</button></div></label>
+            <label class="build-input"><span>KNTQ</span><div><input id="kntqInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxKntqBtn" type="button">MAX</button></div></label>
+          </div>
+          <div class="build-amount-meta"><span id="amountUsd">≈ $—</span><span id="amountRatio">任意一侧输入，另一侧自动配比</span></div>
+          <div class="build-range">
+            <div class="build-label">价格区间</div>
+            <div class="range-presets" id="rangePresets">
+              <button type="button" data-preset="5">±5%</button>
+              <button type="button" data-preset="10">±10%</button>
+              <button type="button" data-preset="25">±25%</button>
+              <button type="button" data-preset="50">±50%</button>
+              <button type="button" data-preset="full">全范围</button>
+              <button type="button" data-preset="custom">自定义</button>
+            </div>
+            <div class="build-custom" id="customRange" hidden><input id="customLower" inputmode="decimal" placeholder="下限 KNTQ/HYPE"><span>—</span><input id="customUpper" inputmode="decimal" placeholder="上限 KNTQ/HYPE"></div>
+            <div class="build-range-preview"><span>下限 <b id="rangeLower">—</b><small id="rangeLowerUsd">$—</small></span><span>当前 <b id="rangeCurrent">—</b></span><span>上限 <b id="rangeUpper">—</b><small id="rangeUpperUsd">$—</small></span></div>
+          </div>
+          <div class="build-options"><label>滑点 <input id="slippageInput" inputmode="decimal" value="0.50"> %</label><small id="slippageHint">只使用你填的百分比，失败不会自动放宽</small></div>
+          <div id="composerError" class="warning-box" hidden></div>
+          <div class="build-actions"><button class="btn primary" id="previewBtn" type="button">预览建仓</button><small>不会自动 swap；缺少 KNTQ 请先准备</small></div>
+        </div>
+        <aside class="build-quote">
+          <div class="build-quote-head"><span>建仓预览</span><b id="quoteState">等待输入</b></div>
+          <div class="build-quote-grid">
+            <div><span>预算</span><b id="quoteBudget">—</b></div><div><span>HYPE</span><b id="quoteHype">—</b></div>
+            <div><span>KNTQ</span><b id="quoteKntq">—</b></div><div><span>比例</span><b id="quoteRatio">—</b></div>
+            <div><span>区间</span><b id="quoteRange">—</b></div><div><span>LP fee</span><b id="quoteFee">1.00%</b></div>
+            <div><span>滑点</span><b id="quoteSlip">0.50%</b></div><div><span>数量上限</span><b id="quoteMin">—</b></div>
+          </div>
+          <p class="build-note" id="quoteNote">输入任意一侧数量，另一侧按当前区间比例自动计算。</p>
+          <div class="swap-ref">
+            <div class="build-label">Swap 参考 <small>仅计算，不执行</small></div>
+            <div class="swap-ref-row"><button type="button" id="swapRefDir">HYPE → KNTQ</button><input id="swapRefAmount" inputmode="decimal" placeholder="0.0"></div>
+            <div class="swap-ref-out" id="swapRefOut">≈ —</div>
+            <small>按当前池价扣除 1% fee，仅供对照；实际兑换请在钱包/DEX 完成。</small>
+          </div>
+        </aside>
+      </div>
+    </section>
+
     <section class="card hype-card">
       <div class="card-head"><div><h3>HYPE 本位资产</h3><small>跨链合计 · 当前价值折合 HYPE</small></div><span class="fee-badge" id="hypeRefBadge">HYPE 本位</span></div>
       <div class="hype-grid">
@@ -141,6 +186,6 @@
   <script src="vendor/ethers.umd.min.js"></script>
   <script src="math.js"></script>
   <script src="abi.js"></script>
-  <script src="app.js?v=20261110-2490"></script>
+  <script src="app.js?v=20261110-2500"></script>
 </body>
 </html>

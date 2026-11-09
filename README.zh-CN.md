@@ -10,6 +10,7 @@
 - 5m / 30m / 1h 年化、未来 1 天预估收益，默认 60 秒刷新。
 - Uniswap 风格 KNTQ/USDT 流动性分布、当前价高亮、统计卡和主要区间表。
 - 底部 HYPE 本位小窗口：Elysium 钱包 + LP 本金折合 + HyperEVM 钱包，可选参考 HYPE 数量。
+- 添加流动性面板：任意一侧自由输入、自动配比、区间预设/自定义、滑点预览、Permit2 授权和 V4 mint。
 - 可选浏览器钱包模式：领取手续费 / 撤池；支持 OKX 内置 Elysium 网络，不在 OKX 里自动新增自定义网络。
 - 每 15 秒检查 PositionManager `balanceOf`，发现新仓位后立即重新读取日志。
 - 可选 Bark 定时报告：待领手续费、净 PnL、已领手续费、区间距离、HYPE 合计和时间。

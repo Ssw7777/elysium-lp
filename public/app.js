@@ -29,7 +29,7 @@
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
     'rangeUpper', 'rangeUpperUsd', 'customRange', 'customLower', 'customUpper', 'slippageInput', 'slippageHint',
     'quoteState', 'quoteBudget', 'quoteHype', 'quoteKntq', 'quoteRatio', 'quoteRange', 'quoteFee', 'quoteSlip', 'quoteMin', 'quoteNote',
-    'composerError', 'previewBtn', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
+    'composerError', 'previewBtn', 'swapRefDir', 'swapRefAmount', 'swapRefOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
     'modalBody', 'modalClose', 'modalCancel', 'modalConfirm', 'toastStack',
     'chartTabs', 'chartInvert', 'priceChart', 'chartEmpty', 'chartLast', 'chartStats',
     'liquidityBars', 'distributionTag', 'distCurrentPrice', 'distAltPrice', 'distStatPrice', 'distHypePrice',
@@ -65,6 +65,7 @@
     lastReadAt: 0,
     refreshing: false,
     loading: true,
+    swapRefDir: 'hype2kntq',
     compose: {
       hype: '', kntq: '', lastEdited: 'hype', preset: '10', lower: '', upper: '', slippagePct: 0.5,
       quote: null, error: null, quoting: false, seq: 0
@@ -1268,8 +1269,29 @@
     quoteTimer = setTimeout(computeQuote, immediate ? 20 : 220);
   }
 
+  function updateSwapRef() {
+    if (!ui.swapRefAmount || !ui.swapRefOut) return;
+    const amount = parseFloatSafe(ui.swapRefAmount.value);
+    const hypeUsd = state.market?.price;
+    const kUsd = kntqUsd();
+    if (!(amount > 0) || !(hypeUsd > 0) || !(kUsd > 0)) { ui.swapRefOut.textContent = '≈ —'; return; }
+    const hypeToKntq = state.swapRefDir !== 'kntq2hype';
+    const rate = hypeToKntq ? hypeUsd / kUsd : kUsd / hypeUsd;
+    const out = amount * rate * 0.99;
+    ui.swapRefOut.textContent = '≈ ' + fmtNum(out, 4) + (hypeToKntq ? ' KNTQ' : ' HYPE');
+  }
+
+  function updatePresetUi() {
+    if (!ui.rangePresets) return;
+    ui.rangePresets.querySelectorAll('button[data-preset]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.preset === state.compose.preset);
+    });
+    if (ui.customRange) ui.customRange.hidden = state.compose.preset !== 'custom';
+  }
+
   function updateComposeUi() {
     if (!state.config || !ui.hypeInput) return;
+    updatePresetUi();
     const maxPct = Number(state.config.safety.maxSlippageBps || 300) / 100;
     ui.slippageInput.max = String(maxPct);
     ui.slippageHint.textContent = '只使用你填的百分比（上限 ' + fmtNum(maxPct, 2) + '%），失败不会自动放宽';
@@ -1302,6 +1324,7 @@
       if (!error) ui.quoteNote.textContent = '输入任意一侧数量，另一侧按当前区间比例自动计算。';
       if (!state.compose.hype && !state.compose.kntq) { ui.amountUsd.textContent = '≈ $—'; ui.amountRatio.textContent = '—'; }
     }
+    updateSwapRef();
     updateComposerButtons();
   }
 
@@ -2142,6 +2165,62 @@
     ui.staleRefreshBtn.addEventListener('click', async () => { await poll(); });
     ui.sortSelect.addEventListener('change', () => { state.sort = ui.sortSelect.value; writeStorage('sort', state.sort); renderPositions(); });
     ui.hideClosed.addEventListener('change', () => { state.hideClosed = ui.hideClosed.checked; writeStorage('hide-closed', state.hideClosed ? '1' : '0'); renderPositions(); });
+    if (ui.hypeInput) {
+      ui.hypeInput.addEventListener('input', () => {
+        state.compose.hype = ui.hypeInput.value;
+        state.compose.lastEdited = 'hype';
+        scheduleQuote();
+      });
+    }
+    if (ui.kntqInput) {
+      ui.kntqInput.addEventListener('input', () => {
+        state.compose.kntq = ui.kntqInput.value;
+        state.compose.lastEdited = 'kntq';
+        scheduleQuote();
+      });
+    }
+    if (ui.maxHypeBtn) {
+      ui.maxHypeBtn.addEventListener('click', () => {
+        if (!state.wallet.address) { toast('请先连接钱包', '连接后才能读取余额。', 'error'); return; }
+        const reserve = parseUnitsSafe(state.config.safety.gasReserveHype || '0.02', 18);
+        const value = state.balances.hype > reserve ? state.balances.hype - reserve : 0n;
+        state.compose.hype = ethers.formatUnits(value, 18).replace(/\.?0+$/, '');
+        state.compose.lastEdited = 'hype';
+        setInputValue(ui.hypeInput, state.compose.hype);
+        scheduleQuote(true);
+      });
+    }
+    if (ui.maxKntqBtn) {
+      ui.maxKntqBtn.addEventListener('click', () => {
+        if (!state.wallet.address) { toast('请先连接钱包', '连接后才能读取余额。', 'error'); return; }
+        state.compose.kntq = ethers.formatUnits(state.balances.kntq, 18).replace(/\.?0+$/, '');
+        state.compose.lastEdited = 'kntq';
+        setInputValue(ui.kntqInput, state.compose.kntq);
+        scheduleQuote(true);
+      });
+    }
+    if (ui.rangePresets) {
+      ui.rangePresets.addEventListener('click', (event) => {
+        const btn = event.target.closest('button[data-preset]');
+        if (!btn) return;
+        state.compose.preset = btn.dataset.preset;
+        updatePresetUi();
+        scheduleQuote(true);
+      });
+    }
+    if (ui.customLower) ui.customLower.addEventListener('input', () => { state.compose.lower = ui.customLower.value; state.compose.preset = 'custom'; updatePresetUi(); scheduleQuote(); });
+    if (ui.customUpper) ui.customUpper.addEventListener('input', () => { state.compose.upper = ui.customUpper.value; state.compose.preset = 'custom'; updatePresetUi(); scheduleQuote(); });
+    if (ui.slippageInput) ui.slippageInput.addEventListener('input', () => { state.compose.slippagePct = parseFloatSafe(ui.slippageInput.value); updateComposeUi(); scheduleQuote(); });
+    if (ui.previewBtn) ui.previewBtn.addEventListener('click', () => { previewBuild().catch((error) => toast('预览失败', decodeErr(error), 'error')); });
+    if (ui.emptyComposeBtn) ui.emptyComposeBtn.addEventListener('click', () => { const node = ui.hypeInput || ui.composer; if (node) node.focus(); });
+    if (ui.swapRefDir) {
+      ui.swapRefDir.addEventListener('click', () => {
+        state.swapRefDir = state.swapRefDir === 'kntq2hype' ? 'hype2kntq' : 'kntq2hype';
+        ui.swapRefDir.textContent = state.swapRefDir === 'kntq2hype' ? 'KNTQ → HYPE' : 'HYPE → KNTQ';
+        updateSwapRef();
+      });
+    }
+    if (ui.swapRefAmount) ui.swapRefAmount.addEventListener('input', updateSwapRef);
     ui.positionsGrid.addEventListener('click', (event) => {
       const btn = event.target.closest('button[data-action]');
       if (!btn) return;
