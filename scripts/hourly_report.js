@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Hourly read-only Elysium LP report to Bark. No private keys. */
+/* Read-only Elysium LP Bark report (5-min timer). Aligns HYPE totals with dashboard updateHypeUi. No private keys. */
 'use strict';
 
 const fs = require('fs');
@@ -13,6 +13,8 @@ const BARK_KEY = (process.env.BARK_KEY || '').trim();
 const BARK_SERVER = (process.env.BARK_SERVER || 'https://api.day.app').replace(/\/+$/, '');
 const CACHE_FILE = process.env.ENTRY_CACHE || path.join(process.env.HOME || '/tmp', '.elysium-lp-entry-cache.json');
 const CLAIMS_FILE = process.env.CLAIMS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-claims.json');
+const ACTIVE_FILE = process.env.ACTIVE_IDS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-active-ids.json');
+const DRY_RUN = String(process.env.DRY_RUN || '').trim() === '1';
 
 const ABI = {
   erc20: [
@@ -55,6 +57,51 @@ function saveCache(cache) {
     fs.writeFileSync(CACHE_FILE, JSON.stringify(cache), { mode: 0o600 });
   } catch (_) { /* report can continue without cache */ }
 }
+
+function loadActiveState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(ACTIVE_FILE, 'utf8'));
+    const ids = Array.isArray(raw?.ids) ? raw.ids : (Array.isArray(raw) ? raw : []);
+    const closed = raw && typeof raw.closed === 'object' && raw.closed ? raw.closed : {};
+    return {
+      ids: [...new Set(ids.map(String).filter(Boolean))],
+      closed: closed
+    };
+  } catch (_) { return { ids: [], closed: {} }; }
+}
+
+function loadActiveIds() {
+  return loadActiveState().ids;
+}
+
+function saveActiveState(ids, closed) {
+  try {
+    fs.mkdirSync(path.dirname(ACTIVE_FILE), { recursive: true });
+    fs.writeFileSync(ACTIVE_FILE, JSON.stringify({
+      updatedAt: Date.now(),
+      ids: [...new Set(ids.map(String))],
+      closed: closed || {}
+    }), { mode: 0o600 });
+  } catch (_) { /* report can continue without active cache */ }
+}
+
+function saveActiveIds(ids) {
+  const prev = loadActiveState();
+  saveActiveState(ids, prev.closed);
+}
+
+function isRecentlyClosed(closedMap, id) {
+  const ts = Number(closedMap?.[id] || 0);
+  if (!Number.isFinite(ts) || ts <= 0) return false;
+  // Skip confirmed-closed / burned ids for 7 days to spare RPC budget.
+  return (Date.now() - ts) < 7 * 24 * 3600 * 1000;
+}
+
+function isBenignOwnerMiss(error) {
+  const msg = String(error?.message || error || '');
+  return /NOT_MINT|nonexistent|invalid token|ERC721: invalid|owner query for nonexistent/i.test(msg);
+}
+
 
 function fmtUsd(value, digits) {
   if (!Number.isFinite(value)) return '—';
@@ -118,6 +165,12 @@ function safeError(error) {
     .slice(0, 240);
 }
 
+
+function barkRpcEndpoints() {
+  return (Array.isArray(CONFIG.network?.rpcUrls) ? CONFIG.network.rpcUrls : [])
+    .filter((ep) => ep && ep.url);
+}
+
 async function probeRpc(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -137,6 +190,28 @@ async function probeRpc(url) {
   }
 }
 
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function transientRpcError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return /429|too many requests|rate limit|exceeded maximum retry|timeout|bad gateway|502|503|504|missing response|could not coalesce/.test(message);
+}
+
+async function rpcRetry(fn, label, attempts = 4) {
+  let last = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try { return await fn(); }
+    catch (error) {
+      last = error;
+      if (!transientRpcError(error) || attempt >= attempts - 1) throw error;
+      const wait = 350 * (attempt + 1);
+      console.log('[retry]', label, 'attempt', attempt + 1, 'wait', wait);
+      await sleep(wait);
+    }
+  }
+  throw last;
+}
+
 async function runReport(rpcUrl) {
   await probeRpc(rpcUrl);
   const provider = new ethers.JsonRpcProvider(rpcUrl, Number(CONFIG.network.chainId), { staticNetwork: true });
@@ -151,12 +226,12 @@ async function runReport(rpcUrl) {
   const transferTopic = ethers.id('Transfer(address,address,uint256)');
   const zeroTopic = '0x' + '0'.repeat(64);
 
-  const logs = await provider.getLogs({
+  const logs = await rpcRetry(() => provider.getLogs({
     address: pmAddress,
     fromBlock: Number(CONFIG.uniswap.deploymentBlock),
     toBlock: 'latest',
     topics: [transferTopic, null, '0x' + OWNER.slice(2).toLowerCase().padStart(64, '0')]
-  });
+  }), 'getLogs');
   const ids = [];
   const mintBlocks = new Map();
   for (const log of logs) {
@@ -165,8 +240,20 @@ async function runReport(rpcUrl) {
     if (String(log.topics[1]).toLowerCase() === zeroTopic) mintBlocks.set(id, Number(log.blockNumber));
     if (!ids.includes(id)) ids.push(id);
   }
+  // Merge previously-known active LPs so a flaky getLogs cannot drop a live position.
+  const activeState = loadActiveState();
+  const knownActive = activeState.ids;
+  const closedMap = { ...activeState.closed };
+  const beforeFilter = ids.length;
+  const filtered = ids.filter((id) => knownActive.includes(id) || !isRecentlyClosed(closedMap, id));
+  ids.length = 0;
+  ids.push(...filtered);
+  for (const id of knownActive) {
+    if (!ids.includes(id)) ids.push(id);
+  }
+  console.log('[discover]', 'logs=' + logs.length, 'rawIds=' + beforeFilter, 'ids=' + ids.join(','), 'knownActive=' + (knownActive.join(',') || '-'));
 
-  const slot0 = await state.getSlot0(poolId);
+  const slot0 = await rpcRetry(() => state.getSlot0(poolId), 'slot0');
   const currentSqrt = BigInt(slot0[0]);
   const rawPrice = (Number(currentSqrt) / 2 ** 96) ** 2;
   let hypeUsd = 0;
@@ -183,26 +270,46 @@ async function runReport(rpcUrl) {
   const rows = [];
   let failedPositions = 0;
   const claimBook = loadClaims()[OWNER.toLowerCase()] || {};
+  const confirmedClosed = new Set();
   for (const id of ids) {
     try {
       let owner;
-      try { owner = await pm.ownerOf(id); } catch (_) { continue; }
-      if (owner.toLowerCase() !== OWNER.toLowerCase()) continue;
-      const info = await pm.getPoolAndPositionInfo(id);
+      try {
+        owner = await rpcRetry(() => pm.ownerOf(id), 'ownerOf ' + id);
+      } catch (error) {
+        if (isBenignOwnerMiss(error)) {
+          confirmedClosed.add(id);
+          continue;
+        }
+        failedPositions += 1;
+        console.log('[position]', id, 'ownerOf', String(error.message || error).slice(0, 120));
+        continue;
+      }
+      if (owner.toLowerCase() !== OWNER.toLowerCase()) {
+        confirmedClosed.add(id);
+        continue;
+      }
+      const info = await rpcRetry(() => pm.getPoolAndPositionInfo(id), 'positionInfo ' + id);
       const packed = BigInt(info[1]);
-      if ((packed >> 56n) !== poolHigh) continue;
+      if ((packed >> 56n) !== poolHigh) {
+        confirmedClosed.add(id);
+        continue;
+      }
       const lower = int24((packed >> 8n) & 0xffffffn);
       const upper = int24((packed >> 32n) & 0xffffffn);
-      const liquidity = await pm.getPositionLiquidity(id);
-      if (liquidity === 0n) continue;
+      const liquidity = await rpcRetry(() => pm.getPositionLiquidity(id), 'liquidity ' + id);
+      if (liquidity === 0n) {
+        confirmedClosed.add(id);
+        continue;
+      }
       const key = ethers.keccak256(ethers.solidityPacked(
         ['address', 'int24', 'int24', 'bytes32'],
         [pmAddress, lower, upper, ethers.zeroPadValue(ethers.toBeHex(BigInt(id)), 32)]
       ));
-      const [positionInfo, growth] = await Promise.all([
+      const [positionInfo, growth] = await rpcRetry(() => Promise.all([
         state.getPositionInfo(poolId, key),
         state.getFeeGrowthInside(poolId, lower, upper)
-      ]);
+      ]), 'feeGrowth ' + id);
       const fee0 = feeFromGrowth(liquidity, growth[0], positionInfo[1]);
       const fee1 = feeFromGrowth(liquidity, growth[1], positionInfo[2]);
       const feeHype = Number(ethers.formatUnits(fee0, 18));
@@ -215,11 +322,11 @@ async function runReport(rpcUrl) {
       let entry = mintBlock ? cache[id + ':' + mintBlock] : null;
       if (!entry && mintBlock) {
         try {
-          const block = await provider.getBlock(mintBlock);
-          const [slot0Mint, liquidityMint] = await Promise.all([
+          const block = await rpcRetry(() => provider.getBlock(mintBlock), 'mintBlock ' + id);
+          const [slot0Mint, liquidityMint] = await rpcRetry(() => Promise.all([
             state.getSlot0(poolId, { blockTag: mintBlock }),
             pm.getPositionLiquidity(id, { blockTag: mintBlock })
-          ]);
+          ]), 'mintState ' + id);
           const mintL = liquidityMint === 0n ? liquidity : liquidityMint;
           const mintSqrt = BigInt(slot0Mint[0]);
           const hypeAt = (await fetchHypeAt(Number(block.timestamp))) || hypeUsd;
@@ -252,63 +359,119 @@ async function runReport(rpcUrl) {
       console.log('[position]', id, String(error.message || error).slice(0, 120));
     }
   }
-  if (failedPositions > 0) throw new Error('position read incomplete: ' + failedPositions + ' failed; refusing partial report');
+  if (failedPositions > 0) {
+    console.log('[position] skipped unreadable candidates:', failedPositions, 'rows=', rows.length);
+    if (!rows.length) throw new Error('position read incomplete: no readable positions');
+  }
+  // Guard: a previously-active LP must either appear in rows or be confirmed closed this run.
+  const missingKnown = knownActive.filter((id) => !rows.some((row) => row.id === id) && !confirmedClosed.has(id));
+  if (missingKnown.length) {
+    throw new Error('known active LP missing from report: ' + missingKnown.join(',') + '; refusing partial report');
+  }
   saveCache(cache);
+  for (const id of confirmedClosed) closedMap[id] = Date.now();
+  // Drop closed markers for ids that are active again.
+  for (const row of rows) delete closedMap[row.id];
+  saveActiveState(rows.map((row) => row.id), closedMap);
+  console.log('[positions]', rows.map((row) => '#' + row.id).join(' ') || '(none)');
 
   const totalFees = rows.reduce((sum, row) => sum + (row.feeUsd || 0), 0);
-  const totalHype = rows.reduce((sum, row) => sum + row.feeHype, 0);
-  const totalKntq = rows.reduce((sum, row) => sum + row.feeKntq, 0);
+  const totalFeeHypeAmt = rows.reduce((sum, row) => sum + row.feeHype, 0);
+  const totalFeeKntqAmt = rows.reduce((sum, row) => sum + row.feeKntq, 0);
   const totalClaimed = Object.values(claimBook).reduce((sum, row) => sum + Number(row.usd || 0), 0);
   const pnlRows = rows.filter((row) => row.pnl != null);
   const totalPnl = pnlRows.length ? pnlRows.reduce((sum, row) => sum + row.pnl, 0) : null;
-  const title = rows.length ? `💧 Elysium LP 待领 ${fmtUsd(totalFees)}` : '💧 Elysium LP 待领 $0.00';
-  const lines = [
-    `目前加上手续费收益净PNL：${totalPnl == null ? '—' : fmtSignedUsd(totalPnl)}`,
-    `费用收入${fmtUsd(totalFees)}（${totalHype.toFixed(6)} HYPE + ${totalKntq.toFixed(4)} KNTQ）`
-  ];
-  if (totalClaimed > 0) lines.push(`已领手续费 ${fmtUsd(totalClaimed)}（计入PNL）`);
-  if (rows.length === 1) {
-    const row = rows[0];
-    lines.push(`距离上区间 ${row.distUp == null ? '—' : row.distUp.toFixed(1) + '%'}   下区间 ${row.distDown == null ? '—' : row.distDown.toFixed(1) + '%'}`);
-  } else if (rows.length > 1) {
-    for (const row of rows) lines.push(`#${row.id} 距上${row.distUp == null ? '—' : row.distUp.toFixed(1) + '%'} 下${row.distDown == null ? '—' : row.distDown.toFixed(1) + '%'}`);
-  } else {
-    lines.push('距离上区间—  下区间—');
-  }
-  let hypeLine = 'HYPE合计 —';
+
+  // Dashboard (updateHypeUi)口径：
+  //   lpHype = (Σ principalUsd + Σ feesUsd) / hypeUsd
+  //   total = Elysium原生HYPE + 钱包KNTQ折合 + HyperEVM原生HYPE + lpHype
+  //   含钱包 KNTQ 折合；待领费计入 LP 折合。
+  const principalUsdSum = rows.reduce((sum, row) => sum + (row.principalUsd || 0), 0);
+  const feeUsdSum = rows.reduce((sum, row) => sum + (row.feeUsd || 0), 0);
+  const lpPrincipalHype = hypeUsd > 0 ? principalUsdSum / hypeUsd : null;
+  const pendingFeesHype = hypeUsd > 0 ? feeUsdSum / hypeUsd : null;
+  const lpHypeEq = (lpPrincipalHype != null && pendingFeesHype != null) ? (lpPrincipalHype + pendingFeesHype) : null;
+
+  let elyHype = null;
+  let hyperHype = null;
+  let hypeComplete = false;
+  let totalHypeEq = null;
+  let vsRef = null;
+  let vsPct = null;
+  const ref = Number(CONFIG.ui?.hypeReference || 0);
   try {
     const kntq = new ethers.Contract(CONFIG.tokens.KNTQ.address, ABI.erc20, provider);
-    const [nativeHype, kntqWallet] = await Promise.all([
+    const [nativeHype, kntqWallet] = await rpcRetry(() => Promise.all([
       nativeBalance(OWNER),
       kntq.balanceOf(OWNER)
-    ]);
-    const elyHype = Number(ethers.formatUnits(nativeHype, 18)) + (hypeUsd > 0 ? Number(ethers.formatUnits(kntqWallet, 18)) * kntqUsd / hypeUsd : 0);
-    const hyperHype = Number(ethers.formatUnits(await hyperEvmBalance(OWNER), 18));
-    const lpUsd = rows.reduce((sum, row) => sum + (row.principalUsd || 0) + (row.feeUsd || 0), 0);
-    const lpHype = hypeUsd > 0 ? lpUsd / hypeUsd : null;
-    if (lpHype != null) {
-      const totalHype = elyHype + lpHype + hyperHype;
-      const ref = Number(CONFIG.ui?.hypeReference || 0);
-      hypeLine = `HYPE合计 ${totalHype.toFixed(4)}（Elysium ${elyHype.toFixed(4)} + LP ${lpHype.toFixed(4)} + HyperEVM ${hyperHype.toFixed(4)}）` + (ref > 0 ? `｜参考${ref.toFixed(2)}｜${totalHype - ref >= 0 ? '+' : ''}${(totalHype - ref).toFixed(4)}` : '');
+    ]), 'wallet balances');
+    elyHype = Number(ethers.formatUnits(nativeHype, 18)) + (hypeUsd > 0 ? Number(ethers.formatUnits(kntqWallet, 18)) * kntqUsd / hypeUsd : 0);
+    hyperHype = Number(ethers.formatUnits(await hyperEvmBalance(OWNER), 18));
+    if (lpHypeEq != null) {
+      totalHypeEq = elyHype + hyperHype + lpHypeEq;
+      hypeComplete = true;
+      if (ref > 0) {
+        vsRef = totalHypeEq - ref;
+        vsPct = (vsRef / ref) * 100;
+      }
     }
   } catch (error) {
     console.log('[hype-total]', String(error.message || error).slice(0, 120));
   }
-  lines.push(hypeLine);
+
+  const title = `💧 Elysium  待领 ${fmtUsd(totalFees)}`;
+  const fmtH = (v, d = 3) => (v == null || !Number.isFinite(v)) ? '—' : Number(v).toFixed(d);
+  const fmtSigned = (v, d = 3) => (v == null || !Number.isFinite(v)) ? '—' : ((v >= 0 ? '+' : '') + Number(v).toFixed(d));
+
+  const lines = [];
+  if (hypeComplete) {
+    lines.push(`资金目前合计≈${fmtH(totalHypeEq, 3)} HYPE`);
+    if (ref > 0) lines.push(`参考${fmtH(ref, 2)}：${fmtSigned(vsRef, 3)} HYPE（${fmtSigned(vsPct, 2)}%）`);
+    else lines.push('参考—：—');
+  } else {
+    lines.push('资金目前合计不完整（Elysium/HyperEVM/LP报价）');
+    lines.push('参考—：—');
+  }
+
+  lines.push('');
+  lines.push(`目前LP本金 ${fmtH(lpPrincipalHype, 3)} | 待领费 ${fmtH(pendingFeesHype, 3)}`);
+  lines.push(`加上手续费收益净PNL：${totalPnl == null ? '—' : fmtSignedUsd(totalPnl)}`);
+  if (totalClaimed > 0) lines.push(`已领手续费 ${fmtUsd(totalClaimed)}（已计入PNL）`);
+
+  lines.push('');
+  lines.push(`目前费用收入${fmtUsd(totalFees)}`);
+  lines.push(`（${totalFeeHypeAmt.toFixed(6)} HYPE + ${totalFeeKntqAmt.toFixed(4)} KNTQ）`);
+
+  lines.push('');
+  if (rows.length >= 1) {
+    for (const row of rows) {
+      lines.push(`#${row.id} 距上${row.distUp == null ? '—' : row.distUp.toFixed(1) + '%'} 下${row.distDown == null ? '—' : row.distDown.toFixed(1) + '%'}`);
+    }
+  } else {
+    lines.push('暂无有效仓位');
+  }
+
+  lines.push('');
   lines.push(new Date().toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: 'numeric', day: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
   }));
+
+  const body = lines.join('\n');
   console.log(title);
-  console.log(lines.join('\n'));
-  await postBark(title, lines.join('\n'));
+  console.log(body);
+  if (DRY_RUN) {
+    console.log('[bark] DRY_RUN=1; skip push');
+    return;
+  }
+  await postBark(title, body);
 }
 
 async function nativeBalance(owner) {
   let lastError = null;
   // Prefer the secondary RPC for the periodic job: the official endpoint
   // rate-limits bursts, while the fallback keeps full position reads.
-  const reportEndpoints = [...CONFIG.network.rpcUrls].reverse();
+  const reportEndpoints = barkRpcEndpoints();
   for (const endpoint of reportEndpoints) {
     try {
       const controller = new AbortController();
@@ -331,7 +494,7 @@ async function nativeBalance(owner) {
 }
 
 async function hyperEvmBalance(owner) {
-  const response = await fetch('https://rpc.hyperliquid.xyz/evm', {
+  const response = await fetch((CONFIG.ui && CONFIG.ui.hyperEvmRpc) || 'https://rpc.hyperliquid.xyz/evm', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getBalance', params: [owner, 'latest'] })
@@ -345,7 +508,7 @@ async function hyperEvmBalance(owner) {
 async function main() {
   if (!OWNER.startsWith('0x') || OWNER.length !== 42) throw new Error('DEFAULT_ADDRESS invalid');
   let lastError = null;
-  const reportEndpoints = [...CONFIG.network.rpcUrls].reverse();
+  const reportEndpoints = barkRpcEndpoints();
   for (const endpoint of reportEndpoints) {
     try {
       console.log('[rpc]', endpoint.name);
