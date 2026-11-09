@@ -11,8 +11,8 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. On-cha
 
 - Reads real V4 pool state, positions, ticks and liquidity distribution from Elysium.
 - Entry value, current value, net PnL, IL, pending fees and **claimed fees**.
-- **Claimed fees are kept in PnL** until the position is fully withdrawn; the position card shows the cumulative claimed USD amount.
-- 5m / 30m / 1h APR, next-day estimated yield and a 60-second refresh.
+- **Claimed fees are kept in PnL** until an optional empty-NFT burn; a normal full withdrawal does not clear them. The position card shows the cumulative claimed USD amount.
+- 5m / 30m / 1h APR, next-day estimated yield, a 20-second price/valuation refresh and a 60-second full position scan.
 - Uniswap-style KNTQ/USDT liquidity distribution, current-price highlight, stats and range table.
 - Direct KNTQ/USDT chart link to OKX in the header; OKX blocks iframe embedding (`X-Frame-Options: DENY`), so it opens in a new tab.
 - HYPE-denominated strip at the bottom: Elysium wallet + LP principal + HyperEVM wallet, with an optional reference amount.
@@ -24,9 +24,18 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. On-cha
 
 ## Read-only and signing / 只读与签名
 
-The server never asks for a mnemonic or private key and never broadcasts a transaction. The browser wallet signs only the claim/withdraw transaction. There is no automatic slippage widening, transaction resend or private-key handling.
+The server never asks for a mnemonic or private key and never broadcasts a transaction. The browser wallet signs only claim, withdraw and add-liquidity transactions. There is no automatic slippage widening, transaction resend or private-key handling.
 
 In the default configuration `ui.defaultAddress` is empty, so the page starts in wallet-connect mode. Set a public address there only if you want a read-only mobile view.
+
+## Using the dashboard / 使用说明
+
+1. **Connect a wallet** in the top-right. Read-only data is always visible; signing is only needed for claim, withdraw and add-liquidity actions.
+2. **Positions** show entry value, current value, PnL, pending/claimed fees, and a two-line range panel. Card backgrounds are green in range, yellow when either edge is within 3%, and red out of range.
+3. **Add liquidity** is below the distribution card. Enter either HYPE or KNTQ, use MAX (a slippage buffer is reserved), choose a preset range or drag the two custom handles, then preview and confirm. Approvals are explicit and limited to the required amount.
+4. **Claimed fees** remain in PnL and in the journal after a normal full withdrawal. The empty NFT is hidden; burning it is a separate optional action.
+5. **HYPE reference** is editable in the HYPE strip and saved to the local server so the Bark report uses the same value. The website re-prices about every 20 seconds; full position discovery runs every 60 seconds.
+6. **KNTQ/USDT chart** opens the OKX page in a new tab from the header; OKX blocks iframe embedding.
 
 ## Quick start / 快速开始
 
@@ -60,7 +69,7 @@ When a claim transaction is confirmed, the frontend posts the owner, token id, c
 ~/.elysium-lp-claims.json
 ```
 
-`GET /api/claims?owner=0x...` returns the journal for one owner. A successful 100% withdrawal calls `POST /api/claim/clear`, which removes that token's journal entry only after the position is gone. Partial withdrawals keep the entry.
+`GET /api/claims?owner=0x...` returns the journal for one owner. The journal entry is cleared only by the optional empty-NFT burn via `POST /api/claim/clear`. A normal 100% withdrawal keeps the entry so claimed fees remain in PnL.
 
 PnL is calculated as:
 
@@ -68,7 +77,7 @@ PnL is calculated as:
 principal + pending fees + cumulative claimed fees - entry value
 ```
 
-A full withdrawal uses `DECREASE_LIQUIDITY + TAKE_PAIR` and **does not burn the NFT** by default; the empty NFT is hidden in the UI. Destroying an empty NFT is a separate, optional `BURN_POSITION + TAKE_PAIR` action with its own confirmation. The journal and the mutating `/api/claim` endpoints contain no keys, but they are still private data. **Put the app behind authentication (for example, Caddy `forward_auth`) before exposing it to the internet.** Do not expose the claim endpoints as an unauthenticated public write API.
+A full withdrawal uses `DECREASE_LIQUIDITY + TAKE_PAIR` and **does not burn the NFT** by default; the empty NFT is hidden in the UI and claimed fees remain in the journal. Destroying an empty NFT is a separate, optional `BURN_POSITION + TAKE_PAIR` action with its own confirmation. The journal and the mutating `/api/claim` endpoints contain no keys, but they are still private data. **Put the app behind authentication (for example, Caddy `forward_auth`) before exposing it to the internet.** Do not expose the claim endpoints as an unauthenticated public write API.
 
 ## Optional periodic Bark report / Bark 定时报告
 
@@ -97,7 +106,7 @@ If you use systemd, a timer such as `OnCalendar=*:0/5` gives a five-minute caden
 ## Limitations / 限制
 
 - Single pool: KNTQ/HYPE. Other-pool dashboards are not included.
-- Adding liquidity is not part of this repository; use another tool.
+- Built-in add-liquidity panel; there is no automatic swap, rebalancing or transaction retry.
 - If liquidity was added after mint, entry value is approximate.
 - Claimed-fee history is recorded from this UI after the journal feature is deployed. Claims made directly in a wallet or before the feature are not reconstructed automatically.
 - HYPE/USD and KNTQ/USD are market estimates, not execution guarantees.
