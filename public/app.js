@@ -24,7 +24,7 @@
     'sumPrincipal', 'sumPrincipalTokens', 'sumFees', 'sumFeesTokens', 'sumApr', 'sumPositions', 'sumEmpty',
     'hourApr', 'dayYield', 'shortApr', 'totalEntry', 'totalCurrent', 'totalPnl', 'totalPnlPct',
     'hypeEly', 'hypeLp', 'hypeHyper', 'hypeTotal', 'hypeMeta', 'hypeRefBadge',
-    'sortSelect', 'hideClosed', 'positionsGrid', 'rangeNotice', 'positionsEmpty', 'emptyComposeBtn', 'emptyBurnBtn', 'composer',
+    'sortSelect', 'hideClosed', 'positionsGrid', 'rangeNotice', 'positionsEmpty', 'emptyComposeBtn', 'emptyBurnBtn', 'cleanupEmptyBtn', 'composer',
     'hypeInput', 'kntqInput', 'maxHypeBtn', 'maxKntqBtn', 'amountUsd', 'amountRatio',
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
     'rangeUpper', 'rangeUpperUsd', 'customRange', 'customLower', 'customUpper', 'slippageInput', 'slippageHint',
@@ -430,39 +430,93 @@
 
   let rpcSeq = 1;
   async function rpcRaw(method, params) {
-    const response = await fetch('api/rpc', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: rpcSeq++, method, params: params || [] })
-    });
-    const text = await response.text();
-    let payload = null;
-    try { payload = text ? JSON.parse(text) : null; } catch (_) { /* noop */ }
-    if (!response.ok) throw new Error(payload?.error?.message || payload?.error || ('RPC HTTP ' + response.status));
-    if (!payload) throw new Error('RPC 返回空响应');
-    if (payload.error) throw Object.assign(new Error(payload.error.message || 'RPC error'), payload.error);
-    return payload.result;
+    let lastError = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const { payload } = await rpcRequestWithRetry('api/rpc', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: rpcSeq++, method, params: params || [] })
+        }, 3);
+        if (!payload) throw new Error('RPC 返回空响应');
+        if (payload.error) {
+          if (rpcRateLimited(payload.error)) throw Object.assign(new Error('RPC 限流'), payload.error);
+          throw Object.assign(new Error(payload.error.message || 'RPC error'), payload.error);
+        }
+        return payload.result;
+      } catch (error) {
+        lastError = error;
+        if (attempt >= 3) break;
+        await sleep(300 * (attempt + 1));
+      }
+    }
+    throw lastError || new Error('RPC unavailable');
+  }
+
+  function rpcRateLimited(error) {
+    if (!error) return false;
+    const message = String(error.message || error || '').toLowerCase();
+    return Number(error.code) === -32017 || message.includes('rate limit') || message.includes('too many requests') || message.includes('429');
+  }
+
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+  async function rpcRequestWithRetry(url, options, attempts) {
+    let last = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      try {
+        const response = await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+        const text = await response.text();
+        let payload = null;
+        try { payload = text ? JSON.parse(text) : null; } catch (_) { /* noop */ }
+        if (response.ok) return { response, payload };
+        last = new Error(payload?.error?.message || payload?.error || ('RPC HTTP ' + response.status));
+        if (response.status !== 429 && response.status < 500) throw last;
+      } catch (error) {
+        last = error;
+      } finally {
+        clearTimeout(timer);
+      }
+      await sleep(250 * (attempt + 1));
+    }
+    throw last || new Error('RPC unavailable');
   }
 
   async function rpcBatchRaw(requests) {
     if (!requests.length) return [];
-    const chunks = [];
-    for (let i = 0; i < requests.length; i += 40) chunks.push(requests.slice(i, i + 40));
-    const out = [];
-    for (const chunk of chunks) {
-      const ids = chunk.map(() => rpcSeq++);
-      const body = chunk.map((r, i) => ({ jsonrpc: '2.0', id: ids[i], method: r.method, params: r.params || [] }));
-      const response = await fetch('api/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) });
-      const text = await response.text();
-      let payload = null;
-      try { payload = text ? JSON.parse(text) : null; } catch (_) { /* noop */ }
-      if (!response.ok) throw new Error(payload?.error?.message || payload?.error || ('RPC HTTP ' + response.status));
-      if (!Array.isArray(payload)) throw new Error('RPC 批量返回格式异常');
-      const byId = new Map(payload.map((item) => [item.id, item]));
-      for (let i = 0; i < chunk.length; i += 1) {
-        const item = byId.get(ids[i]);
-        if (!item) throw new Error('RPC 批量响应缺少条目');
-        out.push(item);
+    const CHUNK = 4;
+    const out = new Array(requests.length);
+    for (let start = 0; start < requests.length; start += CHUNK) {
+      const chunk = requests.slice(start, start + CHUNK);
+      let pending = chunk.map((_, i) => i);
+      for (let attempt = 0; attempt < 4 && pending.length; attempt += 1) {
+        const ids = pending.map(() => rpcSeq++);
+        const body = pending.map((localIndex, i) => ({ jsonrpc: '2.0', id: ids[i], method: chunk[localIndex].method, params: chunk[localIndex].params || [] }));
+        let payload = null;
+        try {
+          const result = await rpcRequestWithRetry('api/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) }, 3);
+          payload = result.payload;
+        } catch (error) {
+          if (attempt >= 3) throw error;
+          await sleep(300 * (attempt + 1));
+          continue;
+        }
+        if (!Array.isArray(payload)) throw new Error('RPC 批量返回格式异常');
+        const byId = new Map(payload.map((item) => [item.id, item]));
+        const next = [];
+        for (let i = 0; i < pending.length; i += 1) {
+          const localIndex = pending[i];
+          const item = byId.get(ids[i]);
+          if (!item) { next.push(localIndex); continue; }
+          if (item.error && rpcRateLimited(item.error)) { next.push(localIndex); continue; }
+          out[start + localIndex] = item;
+        }
+        pending = next;
+        if (pending.length) await sleep(300 * (attempt + 1));
       }
+      if (pending.length) throw new Error('RPC 限流，批量读取未完成');
+      if (start + CHUNK < requests.length) await sleep(180);
     }
     return out;
   }
@@ -660,10 +714,12 @@
     }
     if (!ids.length) return { positions: [], hidden: 0 };
     const owners = await batchCalls(ids.map((id) => ({ to: pm, data: callData(iface.pm, 'ownerOf', [id]) })));
+    if (owners.some((row) => row.error && rpcRateLimited(row.error))) throw new Error('ownerOf 读取被 RPC 限流，已保留旧仓位');
     const currentIds = ids.filter((id, i) => !owners[i].error && lower('0x' + owners[i].result.slice(-40)) === lower(owner));
     if (!currentIds.length) return { positions: [], hidden: 0 };
     const infos = await batchCalls(currentIds.map((id) => ({ to: pm, data: callData(iface.pm, 'getPoolAndPositionInfo', [id]) })));
     const liqs = await batchCalls(currentIds.map((id) => ({ to: pm, data: callData(iface.pm, 'getPositionLiquidity', [id]) })));
+    if (infos.some((row) => row.error) || liqs.some((row) => row.error)) throw new Error('仓位详情读取失败，已保留旧仓位');
     const poolHigh = BigInt(cfg.uniswap.poolId) >> 56n;
     const base = [];
     for (let i = 0; i < currentIds.length; i += 1) {
@@ -1304,6 +1360,10 @@
   }
 
   function renderPositions() {
+    if (ui.cleanupEmptyBtn) {
+      ui.cleanupEmptyBtn.hidden = !(state.hiddenEmpty > 0);
+      ui.cleanupEmptyBtn.textContent = '清理 ' + state.hiddenEmpty + ' 个空 NFT';
+    }
     if (state.loading && !state.positions.length) {
       ui.positionsGrid.innerHTML = '<div class="loading-card"></div><div class="loading-card"></div><div class="loading-card"></div>';
       ui.positionsEmpty.hidden = true;
@@ -1903,12 +1963,12 @@
     const full = percent >= 100;
     const action = full ? 'BURN_POSITION + TAKE_PAIR' : 'DECREASE_LIQUIDITY + TAKE_PAIR';
     const warning = full
-      ? 'BURN_POSITION 会自动撤出全部流动性、领取本金和手续费，并销毁 NFT。销毁后 Ascend 不会再把这个仓位列出来。最低数量按 2% 保护。'
-      : 'DECREASE_LIQUIDITY + TAKE_PAIR；NFT 会保留，只有 100% 撤池才会销毁 NFT。最低数量按 2% 保护。';
+      ? 'DECREASE_LIQUIDITY + TAKE_PAIR；撤出全部流动性和手续费，但不会销毁 NFT。NFT 会变成空仓，默认隐藏；需要时再单独销毁空 NFT。最低数量按 2% 保护。'
+      : 'DECREASE_LIQUIDITY + TAKE_PAIR；NFT 会保留。最低数量按 2% 保护。';
     return '<div class="preview-grid"><div class="preview-item"><span>撤出比例</span><strong>' + percent + '%</strong></div><div class="preview-item"><span>滑点</span><strong>' + fmtNum(slip / 100, 2) + '%</strong></div><div class="preview-item"><span>预计 HYPE</span><strong>' + fmtToken(e.amount0, 18, 6) + '</strong></div><div class="preview-item"><span>预计 KNTQ</span><strong>' + fmtToken(e.amount1, 18, 5) + '</strong></div><div class="preview-item"><span>最低 HYPE</span><strong>' + fmtToken(e.min0, 18, 6) + '</strong></div><div class="preview-item"><span>最低 KNTQ</span><strong>' + fmtToken(e.min1, 18, 5) + '</strong></div></div>' +
       '<div class="field" style="margin-top:12px"><span>撤出比例</span><select class="input" id="withdrawPct">' + [25, 50, 75, 100].map((v) => '<option value="' + v + '"' + (v === percent ? ' selected' : '') + '>' + v + '%</option>').join('') + '</select></div>' +
       '<div class="warning-box">' + warning + '</div>' +
-      '<div class="preview-section"><h4>执行步骤</h4><div class="preview-list"><div class="preview-step pending" data-step-id="withdraw"><span class="step-index">1</span><div><strong>' + (full ? '销毁 NFT + 撤出全部本金/手续费' : '减少流动性 + 领取本金/手续费') + '</strong><small>modifyLiquidities([' + action + '])</small></div><span class="step-state">待签名前模拟</span></div></div></div>';
+      '<div class="preview-section"><h4>执行步骤</h4><div class="preview-list"><div class="preview-step pending" data-step-id="withdraw"><span class="step-index">1</span><div><strong>减少流动性 + 领取本金/手续费</strong><small>modifyLiquidities([DECREASE_LIQUIDITY, TAKE_PAIR])</small></div><span class="step-state">待签名前模拟</span></div></div></div>';
   }
 
   function openWithdraw(position) {
@@ -1929,17 +1989,15 @@
         const e = withdrawalAmounts(position, percent, slip);
         if (e.liquidity <= 0n) throw new Error('撤出数量为 0');
         const deadline = nowSec() + 600;
-        const fullBurn = percent >= 100;
-        const data = fullBurn ? buildBurnData(position.tokenId, e.min0, e.min1, deadline) : buildCollectData(position.tokenId, e.liquidity, e.min0, e.min1, deadline);
-        const step = { id: 'withdraw', label: fullBurn ? '销毁 NFT + 撤出全部本金/手续费' : '减少流动性 + 领取本金/手续费', detail: percent + '% · 最低 ' + fmtToken(e.min0, 18, 6) + ' HYPE + ' + fmtToken(e.min1, 18, 5) + ' KNTQ', to: getAddress(state.config.uniswap.positionManager), data, value: 0n };
+        const data = buildCollectData(position.tokenId, e.liquidity, e.min0, e.min1, deadline);
+        const step = { id: 'withdraw', label: '减少流动性 + 领取本金/手续费', detail: percent + '% · 最低 ' + fmtToken(e.min0, 18, 6) + ' HYPE + ' + fmtToken(e.min1, 18, 5) + ' KNTQ', to: getAddress(state.config.uniswap.positionManager), data, value: 0n };
         await executeSteps([step], (s, i, phase) => {
           if (phase === 'simulating') setStepState('withdraw', '模拟中…', 'pending');
           if (phase === 'signing') setStepState('withdraw', '模拟通过 · 请在钱包确认', 'pending');
           if (phase === 'sent') setStepState('withdraw', '已发送，等待确认', 'pending');
           if (phase === 'confirmed') setStepState('withdraw', '已确认', '');
         });
-        if (percent >= 100) await clearClaim(position.tokenId);
-        toast('撤池完成', percent === 100 ? 'NFT 已销毁，本金和手续费已撤回；Ascend 不会再列出这个仓位。' : '已撤出 ' + percent + '%。', 'success');
+        toast('撤池完成', percent === 100 ? '本金和手续费已撤回；NFT 保留为空仓并默认隐藏，不会被自动销毁。' : '已撤出 ' + percent + '%。', 'success');
         closeModal(true); await refreshAll();
       }
     });
@@ -2049,6 +2107,7 @@
     ui.rpcBadge.addEventListener('click', openStatusModal);
     ui.refreshBtn.addEventListener('click', async () => { state.forceLogs = true; await poll(); toast('已刷新', '链上快照与行情已更新。'); });
     if (ui.emptyBurnBtn) ui.emptyBurnBtn.addEventListener('click', openBurnAllEmpty);
+    if (ui.cleanupEmptyBtn) ui.cleanupEmptyBtn.addEventListener('click', openBurnAllEmpty);
     ui.staleRefreshBtn.addEventListener('click', async () => { await poll(); });
     ui.sortSelect.addEventListener('change', () => { state.sort = ui.sortSelect.value; writeStorage('sort', state.sort); renderPositions(); });
     ui.hideClosed.addEventListener('change', () => { state.hideClosed = ui.hideClosed.checked; writeStorage('hide-closed', state.hideClosed ? '1' : '0'); renderPositions(); });

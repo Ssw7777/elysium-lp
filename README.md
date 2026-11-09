@@ -66,7 +66,7 @@ PnL is calculated as:
 principal + pending fees + cumulative claimed fees - entry value
 ```
 
-The journal and the mutating `/api/claim` endpoints contain no keys, but they are still private data. **Put the app behind authentication (for example, Caddy `forward_auth`) before exposing it to the internet.** Do not expose the claim endpoints as an unauthenticated public write API.
+A full withdrawal uses `DECREASE_LIQUIDITY + TAKE_PAIR` and **does not burn the NFT** by default; the empty NFT is hidden in the UI. Destroying an empty NFT is a separate, optional `BURN_POSITION + TAKE_PAIR` action with its own confirmation. The journal and the mutating `/api/claim` endpoints contain no keys, but they are still private data. **Put the app behind authentication (for example, Caddy `forward_auth`) before exposing it to the internet.** Do not expose the claim endpoints as an unauthenticated public write API.
 
 ## Optional periodic Bark report / Bark 定时报告
 
