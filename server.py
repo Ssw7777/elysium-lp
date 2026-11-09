@@ -234,6 +234,7 @@ class RpcPool:
         payload: dict[str, Any] | list[Any],
         *,
         retries: int | None = None,
+        primary_only: bool = False,
     ) -> tuple[Any, RpcEndpoint]:
         if not isinstance(payload, (dict, list)):
             raise ValueError("JSON-RPC payload must be an object or array")
@@ -243,9 +244,12 @@ class RpcPool:
         start_index = self._active
         now = time.time()
 
-        order = list(range(total))
-        # Prefer the currently healthy active endpoint, then the rest.
-        order.sort(key=lambda idx: (idx != start_index, not self.endpoints[idx].healthy(now, self.cooldown)))
+        order = [0] if primary_only else list(range(total))
+        if not primary_only:
+            # Prefer the currently healthy active endpoint, then the rest.
+            order.sort(key=lambda idx: (idx != start_index, not self.endpoints[idx].healthy(now, self.cooldown)))
+        if primary_only:
+            attempts = 1
 
         for endpoint_index in order[: max(1, attempts)]:
             endpoint = self.endpoints[endpoint_index]
@@ -722,6 +726,14 @@ class LocalHandler(BaseHTTPRequestHandler):
                 return
         self._send_file(candidate)
 
+    @staticmethod
+    def _payload_has_method(payload: Any, method: str) -> bool:
+        if isinstance(payload, dict):
+            return payload.get("method") == method
+        if isinstance(payload, list):
+            return any(isinstance(item, dict) and item.get("method") == method for item in payload)
+        return False
+
     def _handle_rpc(self) -> None:
         raw = self._read_body()
         if raw is None:
@@ -736,7 +748,7 @@ class LocalHandler(BaseHTTPRequestHandler):
             self._send_json({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": problem}}, HTTPStatus.BAD_REQUEST)
             return
         try:
-            response, endpoint = self.server.state.rpc.request(payload)
+            response, endpoint = self.server.state.rpc.request(payload, primary_only=self._payload_has_method(payload, 'eth_getLogs'))
         except RpcUnavailable as exc:
             self._send_json(
                 {"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": f"all RPC endpoints failed: {exc}"}},

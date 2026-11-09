@@ -148,6 +148,7 @@
       try { return '合约 Panic(' + ethers.AbiCoder.defaultAbiCoder().decode(['uint256'], '0x' + raw.slice(10))[0] + ')'; } catch (_) { /* noop */ }
     }
     if (raw === '0x3b99b53d') return 'Uniswap V4 参数编码越界（SliceOutOfBounds），已停止';
+    if (typeof raw === 'string' && raw.startsWith('0x12816f22')) return '撤池最低数量未满足（MinimumAmountInsufficient）。价格在读取后发生了变化，请刷新后重试；保护滑点为 2%，不会自动放宽。';
     return message.length > 260 ? message.slice(0, 260) + '…' : message;
   }
 
@@ -635,7 +636,7 @@
     } catch (_) { /* cache fallback */ }
     let ids = [];
     let mintBlocks = new Map();
-    if (cached && balance != null && Number(cached.balance) === balance && Date.now() - cached.at < 2 * 60 * 1000 && !state.forceLogs) {
+    if (cached && balance != null && Number(cached.balance) === balance && (cached.ids || []).length >= balance && Date.now() - cached.at < 2 * 60 * 1000 && !state.forceLogs) {
       ids = (cached.ids || []).map((id) => BigInt(id));
       mintBlocks = new Map(Object.entries(cached.mintBlocks || {}).map(([k, v]) => [k, Number(v)]));
     } else {
@@ -652,6 +653,7 @@
         if (String(log.topics[1]).toLowerCase() === '0x' + '0'.repeat(64)) mintBlocks.set(id, Number(BigInt(log.blockNumber)));
         if (!seen.has(id)) { seen.add(id); ids.push(BigInt(id)); }
       }
+      if (balance != null && ids.length < balance) throw new Error('仓位日志读取不完整，已保留旧数据');
       state.positionIds[cacheKey] = { ids: ids.map(String), mintBlocks: Object.fromEntries(mintBlocks), balance, at: Date.now() };
       saveJson(STORAGE_PREFIX + 'position-ids', state.positionIds);
       state.forceLogs = false;
@@ -1285,7 +1287,7 @@
                 ((!p.closed && p.liquidity > 0n) ? '<button class="btn small primary" data-action="withdraw" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>撤池</button>' : '') +
                 (p.closed ? '<span class="metric-sub">已隐藏空仓 · 仍可领取剩余手续费</span>' : '')) +
           '</div>' +
-          '<div class="pos-detail"><span>NFT #' + p.tokenId + (p.entryAgeSec == null ? '' : ' · 持仓 ' + M.formatDuration(p.entryAgeSec)) + '</span><b>1.00%</b></div>' +
+          '<div class="pos-detail"><span>NFT #' + p.tokenId + (p.entryAgeSec == null ? '' : ' · 持仓 ' + M.formatDuration(p.entryAgeSec)) + '</span><b>2.00%</b></div>' +
         '</div>' +
       '</article>';
   }
@@ -1854,8 +1856,8 @@
 
   function openWithdraw(position) {
     if (txBlocked()) { toast('数据过期', '刷新后再撤池。', 'error'); return; }
-    const slipPct = 1;
-    const slip = 100;
+    const slipPct = 2;
+    const slip = 200;
     if (!(slipPct > 0) || slipPct > Number(state.config.safety.maxSlippageBps || 500) / 100) { toast('撤池滑点设置无效', '请联系维护者。', 'error'); return; }
     if (!(position.liquidity > 0n)) { toast('该仓位没有流动性', '可能已撤出。'); return; }
     let percent = 100;
