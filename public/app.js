@@ -834,7 +834,7 @@
       p.entry = entry;
       p.entryValueUsd = entry.valueUsd;
       p.currentValueUsd = p.principalUsd + (p.feesUsd || 0) + (p.claimedUsd || 0);
-      p.pnlUsd = p.currentValueUsd - entry.valueUsd;
+      p.pnlUsd = p.principalUsd + (p.feesUsd || 0) + (p.claimedUsd || 0) - entry.valueUsd;
       p.pnlPct = entry.valueUsd > 0 ? p.pnlUsd / entry.valueUsd * 100 : null;
       p.entryAgeSec = Math.max(0, block.timestamp - entry.mintTs);
       const hodl = Number(ethers.formatUnits(BigInt(entry.amount0), 18)) * currentHype + Number(ethers.formatUnits(BigInt(entry.amount1), 18)) * currentK;
@@ -975,18 +975,26 @@
       let hidden = 0;
       if (state.wallet.address && state.wallet.chainId === Number(state.config.network.chainId)) {
         try { balances = await readBalances(); } catch (error) { console.warn('[balances]', decodeErr(error)); balances = state.balances; }
-        await loadClaims();
-        try { state.hyperEvmHype = await readHyperEvmBalance(); } catch (_) { state.hyperEvmHype = null; }
+        const claimsPromise = loadClaims();
         const result = await readPositions(block);
         positions = result.positions;
         hidden = result.hidden;
-        await attachPnl(positions, block);
+        await claimsPromise;
         state.balances = balances;
         state.positions = positions;
         state.hiddenEmpty = hidden;
         state.lastReadAt = Date.now();
         state.loading = false;
+        // Paint the position list before expensive entry/APR work.
         updateWalletUi();
+        renderPositions();
+        updateSummary();
+        updateHypeUi();
+        updateStaleUi();
+        // HYPE wallet balance is independent; do not block the first paint on it.
+        readHyperEvmBalance().then((value) => { state.hyperEvmHype = value; updateHypeUi(); }).catch(() => { state.hyperEvmHype = null; updateHypeUi(); });
+        await attachPnl(positions, block);
+        state.positions = positions;
         renderPositions();
         updateSummary();
         updateHypeUi();
@@ -1308,9 +1316,15 @@
         '<div class="pos-head"><div class="pos-id"><strong>#' + p.tokenId + '</strong><span class="pair">KNTQ / HYPE</span></div><span class="badge ' + statusClass + '">' + status + '</span></div>' +
         '<div class="pos-pnl">' +
           '<span>投入 ' + (p.entryValueUsd == null ? '—' : (p.entry?.estimated ? '≈' : '') + fmtUsd(p.entryValueUsd)) + '</span>' +
-          '<span>当前 ' + (p.currentValueUsd == null ? '—' : fmtUsd(p.currentValueUsd)) + '</span>' +
+          '<span>当前总价值 ' + (p.currentValueUsd == null ? '—' : fmtUsd(p.currentValueUsd, { digits: 2 })) + '</span>' +
           '<b class="' + (p.pnlUsd == null ? '' : p.pnlUsd >= 0 ? 'pnl-up' : 'pnl-down') + '">PNL ' + (p.pnlUsd == null ? '—' : fmtSignedUsd(p.pnlUsd)) + (p.pnlPct == null ? '' : ' (' + (p.pnlPct >= 0 ? '+' : '') + fmtNum(p.pnlPct, 2) + '%)') + '</b>' +
-          '<small>' + (p.entry ? '建仓 KNTQ ' + fmtUsd(p.entry.kntqAt, { digits: 4 }) + ' · 当前 ' + (k == null ? '$—' : fmtUsd(k, { digits: 4 })) + ' · ' : '') + (p.ilUsd == null ? '含待领手续费' : '含待领 · IL ' + fmtSignedUsd(p.ilUsd)) + (p.claimedUsd > 0 ? ' · 已领 ' + fmtUsd(p.claimedUsd) : '') + (p.entry?.estimated ? ' · 估算' : '') + '</small>' +
+          '<small>' + (p.entry ? '建仓 KNTQ ' + fmtUsd(p.entry.kntqAt, { digits: 4 }) + ' · 当前 ' + (k == null ? '$—' : fmtUsd(k, { digits: 4 })) + ' · ' : '') + (p.ilUsd == null ? '已含待领+已领' : '已含待领+已领 · IL ' + fmtSignedUsd(p.ilUsd)) + (p.claimedUsd > 0 ? ' · 已领 ' + fmtUsd(p.claimedUsd) : '') + (p.entry?.estimated ? ' · 估算' : '') + '</small>' +
+        '</div>' +
+        '<div class="pnl-equation">' +
+          '<span>本金 <b>' + (p.principalUsd == null ? '$—' : fmtUsd(p.principalUsd)) + '</b></span><i>+</i>' +
+          '<span>待领收益 <b>' + (p.feesUsd == null ? '$—' : fmtUsd(p.feesUsd, { digits: 2 })) + '</b></span><i>+</i>' +
+          '<span>已领取收益 <b>' + fmtUsd(p.claimedUsd || 0, { digits: 2 }) + '</b></span><i>=</i>' +
+          '<span class="eq-total">当前总价值 <b>' + (p.currentValueUsd == null ? '$—' : fmtUsd(p.currentValueUsd, { digits: 2 })) + '</b></span>' +
         '</div>' +
         '<div class="pos-metrics">' +
           '<div class="metric"><div class="metric-label"><span>本金 · 当前估值</span><span>' + (p.inRange ? 'IN RANGE' : 'OUT') + '</span></div>' +
@@ -1436,10 +1450,10 @@
     const totalCurrent = active.reduce((sum, p) => sum + (p.currentValueUsd || p.principalUsd || 0), 0) + unallocatedClaimed;
     const totalPnl = withEntry.length ? withEntry.reduce((sum, p) => sum + (p.pnlUsd || 0), 0) + unallocatedClaimed : (unallocatedClaimed > 0 ? unallocatedClaimed : null);
     ui.totalEntry.textContent = withEntry.length ? fmtUsd(totalEntry) : '$—';
-    ui.totalCurrent.textContent = active.length || unallocatedClaimed > 0 ? fmtUsd(totalCurrent) : '$—';
+    ui.totalCurrent.textContent = active.length || unallocatedClaimed > 0 ? fmtUsd(totalCurrent, { digits: 2 }) : '$—';
     ui.totalPnl.textContent = totalPnl == null ? '—' : fmtSignedUsd(totalPnl);
     ui.totalPnl.className = totalPnl == null ? '' : totalPnl >= 0 ? 'gain' : 'loss';
-    ui.totalPnlPct.textContent = totalPnl == null || !(totalEntry > 0) ? '含待领/已领 · 未实现' : (totalPnl >= 0 ? '+' : '') + fmtNum(totalPnl / totalEntry * 100, 2) + '% · 含待领/已领';
+    ui.totalPnlPct.textContent = totalPnl == null || !(totalEntry > 0) ? '本金+待领+已领-投入' : (totalPnl >= 0 ? '+' : '') + fmtNum(totalPnl / totalEntry * 100, 2) + '% · 已含待领/已领';
   }
 
   const CHART_TF = {
