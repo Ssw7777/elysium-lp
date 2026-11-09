@@ -16,8 +16,9 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. On-cha
 - Uniswap-style KNTQ/USDT liquidity distribution, current-price highlight, stats and range table.
 - Direct KNTQ/USDT chart link to OKX in the header; OKX blocks iframe embedding (`X-Frame-Options: DENY`), so it opens in a new tab.
 - HYPE-denominated strip at the bottom: Elysium wallet + LP principal + HyperEVM wallet, with an optional reference amount.
-- Add-liquidity panel: free input on either side, auto-ratio, range presets/custom range, slippage preview, Permit2 approvals and V4 mint.
-- Optional browser-wallet mode for claiming fees / withdrawing liquidity. OKX Wallet's built-in Elysium network is supported; the app does not create a custom network on OKX.
+- Add-liquidity panel: free input on either side, auto-ratio, ±2/±5/±10/±25/±50/full/custom ranges, slippage preview, Permit2 approvals and V4 mint. Wallet balances refresh automatically.
+- Sticky section navigation, range APR estimates for ±2/5/10%, 5m–24h volume/fee windows, and a read-only watched-address position panel.
+- Optional browser-wallet mode for claiming fees, withdrawing liquidity and adding liquidity. OKX Wallet's built-in Elysium network is supported; the app does not create a custom network on OKX.
 - New positions are detected by a 15-second PositionManager `balanceOf` watcher, then a fresh log read.
 - Optional periodic Bark report. The sample job sends pending fees, net PnL, claimed fees, range distance, HYPE total and timestamp; `isArchive: 1` keeps history.
 - Official Elysium RPC only; no third-party RPC fallback.
@@ -31,10 +32,10 @@ In the default configuration `ui.defaultAddress` is empty, so the page starts in
 ## Using the dashboard / 使用说明
 
 1. **Connect a wallet** in the top-right. Read-only data is always visible; signing is only needed for claim, withdraw and add-liquidity actions.
-2. **Positions** show entry value, current value, PnL, pending/claimed fees, and a two-line range panel. Card backgrounds are green in range, yellow when either edge is within 3%, and red out of range.
-3. **Add liquidity** is below the distribution card. Enter either HYPE or KNTQ, use MAX (a slippage buffer is reserved), choose a preset range or drag the two custom handles, then preview and confirm. Approvals are explicit and limited to the required amount.
+2. **Positions** show entry value, current value, PnL, pending/claimed fees, and a two-line range panel. Card backgrounds are green in range, yellow when either edge is within 3%, and red out of range. The sticky top navigation jumps to each section.
+3. **Add liquidity** is the section after positions; the range statistics and watched-address panels follow it, then the distribution card. Enter either HYPE or KNTQ, use MAX (a slippage buffer is reserved), choose a preset range or drag the two custom handles, then preview and confirm. Approvals are explicit and limited to the required amount.
 4. **Claimed fees** remain in PnL and in the journal after a normal full withdrawal. The empty NFT is hidden; burning it is a separate optional action.
-5. **HYPE reference** is editable in the HYPE strip and saved to the local server so the Bark report uses the same value. The website re-prices about every 20 seconds; full position discovery runs every 60 seconds.
+5. **HYPE reference** is editable in the HYPE strip and saved to the local server so the Bark report uses the same value. Wallet balances refresh automatically; prices/valuations re-price about every 20 seconds and full position discovery runs every 60 seconds.
 6. **KNTQ/USDT chart** opens the OKX page in a new tab from the header; OKX blocks iframe embedding.
 
 ## Quick start / 快速开始

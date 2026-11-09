@@ -30,7 +30,7 @@
     'rangePresets', 'rangeLower', 'rangeLowerUsd', 'rangeCurrent',
     'rangeUpper', 'rangeUpperUsd', 'customRange', 'customLower', 'customUpper', 'slippageInput', 'slippageHint',
     'quoteState', 'quoteBudget', 'quoteHype', 'quoteKntq', 'quoteRatio', 'quoteRange', 'quoteFee', 'quoteSlip', 'quoteMin', 'quoteNote',
-    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'authState', 'reauthBtn', 'refreshBalBtn', 'hypeRefInput', 'hypeRefSave', 'sliderLower', 'sliderCurrent', 'sliderUpper', 'rangeMin', 'rangeMax', 'rangeSliderFill', 'rangeSliderCurrent', 'rangeZoomIn', 'rangeZoomOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
+    'composerError', 'previewBtn', 'buildHypeBal', 'buildKntqBal', 'authState', 'reauthBtn', 'balanceAutoHint', 'hypeRefInput', 'hypeRefSave', 'statsUpdated', 'rangeAprGrid', 'volumeStats', 'statsNote', 'watchInput', 'watchBtn', 'watchClear', 'watchMeta', 'watchGrid', 'sliderLower', 'sliderCurrent', 'sliderUpper', 'rangeMin', 'rangeMax', 'rangeSliderFill', 'rangeSliderCurrent', 'rangeZoomIn', 'rangeZoomOut', 'footerRpc', 'footerUpdated', 'modalBackdrop', 'modalTitle', 'modalEyebrow',
     'modalBody', 'modalClose', 'modalCancel', 'modalConfirm', 'toastStack',
     'chartTabs', 'chartInvert', 'priceChart', 'chartEmpty', 'chartLast', 'chartStats',
     'liquidityBars', 'distributionTag', 'distCurrentPrice', 'distAltPrice', 'distStatPrice', 'distHypePrice',
@@ -59,7 +59,7 @@
     marketAt: 0,
     wallet: { address: null, chainId: null, provider: null, signer: null, connecting: false, readOnly: false },
     pool: null,
-    balances: { hype: 0n, kntq: 0n },
+    balances: { hype: 0n, kntq: 0n }, balancesAt: 0, balancesRefreshing: false,
     hyperEvmHype: null,
     positions: [],
     hiddenEmpty: 0,
@@ -83,6 +83,8 @@
     entryCache: loadJson(STORAGE_PREFIX + 'entry-cache', {}),
     claims: {},
     hypeReference: 0,
+    stats: { at: 0, data: null, loading: false },
+    watch: { owner: null, loading: false },
     forceLogs: false,
     modal: { onConfirm: null, busy: false }
   };
@@ -104,7 +106,17 @@
     const d = o.digits == null ? (v < 1 ? 4 : v < 1000 ? 2 : 0) : o.digits;
     return '$' + fmtNum(v, d);
   }
-  function fmtSignedUsd(v) {
+  function fmtUsdCompact(v) {
+  if (!Number.isFinite(v)) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 1e9) return '$' + fmtNum(v / 1e9, 2) + 'B';
+  if (abs >= 1e6) return '$' + fmtNum(v / 1e6, 2) + 'M';
+  if (abs >= 1e3) return '$' + fmtNum(v / 1e3, 2) + 'K';
+  if (abs >= 1) return '$' + fmtNum(v, 2);
+  return '$' + fmtNum(v, 4);
+}
+
+function fmtSignedUsd(v) {
     if (v == null || !Number.isFinite(v)) return '—';
     return (v >= 0 ? '+$' : '-$') + fmtNum(Math.abs(v), Math.abs(v) < 1 ? 4 : 2);
   }
@@ -338,6 +350,7 @@
     if (ui.connectBtn) ui.connectBtn.textContent = connected ? shortAddress(state.wallet.address) : '连接钱包';
     if (ui.buildHypeBal) ui.buildHypeBal.textContent = connected ? fmtToken(state.balances.hype, 18, 4) + ' HYPE' : '—';
     if (ui.buildKntqBal) ui.buildKntqBal.textContent = connected ? fmtToken(state.balances.kntq, 18, 5) + ' KNTQ' : '—';
+    if (ui.balanceAutoHint) ui.balanceAutoHint.textContent = connected ? '余额自动刷新' : '连接后自动刷新';
     if (ui.walletAddress) {
       ui.walletAddress.textContent = connected ? shortAddress(state.wallet.address) : '未连接';
       ui.walletAddress.title = connected ? state.wallet.address : '';
@@ -632,10 +645,23 @@
     if (!state.wallet.address) return null;
     const fresh = await readBalances();
     state.balances = fresh;
+    state.balancesAt = Date.now();
     updateWalletUi();
     updateComposeUi();
     updateAuthState();
     return fresh;
+  }
+
+  let balanceTimer = null;
+  async function autoRefreshBalances(force) {
+    if (!state.wallet.address || state.balancesRefreshing || state.refreshing) return;
+    if (document.hidden && !force) return;
+    state.balancesRefreshing = true;
+    try {
+      await refreshBalances();
+      if (state.compose.hype || state.compose.kntq) scheduleQuote(true);
+    } catch (_) { /* next auto tick */ }
+    finally { state.balancesRefreshing = false; }
   }
 
   async function loadHypeReference() {
@@ -780,8 +806,8 @@
     return (liquidity * delta) >> 128n;
   }
 
-  async function readPositions(block) {
-    const owner = state.wallet.address;
+  async function readPositions(block, ownerOverride) {
+    const owner = ownerOverride || state.wallet.address;
     if (!owner) return { positions: [], hidden: 0 };
     const cfg = state.config;
     const pm = getAddress(cfg.uniswap.positionManager);
@@ -868,7 +894,7 @@
       const feesUsd = kUsd == null ? null : Number(ethers.formatUnits(fees0, 18)) * hypeUsd + Number(ethers.formatUnits(fees1, 18)) * kUsd;
       const closed = p.liquidity === 0n && fees0 === 0n && fees1 === 0n;
       if (closed) hidden += 1;
-      const firstKey = (state.wallet.address || '') + ':' + p.tokenId.toString();
+      const firstKey = (owner || '') + ':' + p.tokenId.toString();
       if (!state.firstSeen[firstKey]) { state.firstSeen[firstKey] = Date.now(); saveJson(STORAGE_PREFIX + 'first-seen', state.firstSeen); }
       positions.push(Object.assign({}, p, {
         sqrtLower, sqrtUpper, amount0: amounts.amount0, amount1: amounts.amount1,
@@ -1158,6 +1184,7 @@
       scheduleQuote(true);
       scheduleChart();
       scheduleDistribution();
+      scheduleStats();
     } catch (error) {
       state.loading = false;
       updateStaleUi();
@@ -1456,8 +1483,8 @@
       }
       const amount0Max = amounts.amount0 + amounts.amount0 * BigInt(slip) / 10000n + 2n;
       const amount1Max = amounts.amount1 + amounts.amount1 * BigInt(slip) / 10000n + 2n;
-      if (state.wallet.address && amount0Max + gasReserve > state.balances.hype) throw new Error('HYPE 余额不足：本次最多需要 ' + fmtToken(amount0Max + gasReserve, 18, 5) + '（含滑点缓冲和 gas），钱包 ' + fmtToken(state.balances.hype, 18, 5) + '。请点“刷新余额”或减少数量。');
-      if (state.wallet.address && amounts.amount1 > state.balances.kntq) throw new Error('KNTQ 余额不足：本次需要 ' + fmtToken(amounts.amount1, 18, 5) + '，钱包 ' + fmtToken(state.balances.kntq, 18, 5) + '。请点“刷新余额”或减少 HYPE 数量。');
+      if (state.wallet.address && amount0Max + gasReserve > state.balances.hype) throw new Error('HYPE 余额不足：本次最多需要 ' + fmtToken(amount0Max + gasReserve, 18, 5) + '（含滑点缓冲和 gas），钱包 ' + fmtToken(state.balances.hype, 18, 5) + '。余额会自动刷新，也可减少数量。');
+      if (state.wallet.address && amounts.amount1 > state.balances.kntq) throw new Error('KNTQ 余额不足：本次需要 ' + fmtToken(amounts.amount1, 18, 5) + '，钱包 ' + fmtToken(state.balances.kntq, 18, 5) + '。余额会自动刷新，也可减少 HYPE 数量。');
       const kUsd = kntqUsd();
       const totalUsd = kUsd == null ? null : Number(ethers.formatUnits(amounts.amount0, 18)) * state.market.price + Number(ethers.formatUnits(amounts.amount1, 18)) * kUsd;
       state.compose.quote = {
@@ -1743,6 +1770,150 @@
       else { const c = map.get(bucket); c.h = Math.max(c.h, price); c.l = Math.min(c.l, price); c.c = price; c.n += 1; }
     }
     return Array.from(map.values()).sort((a, b) => a.t - b.t);
+  }
+
+  const STATS_WINDOWS = [
+    { key: '5m', label: '5 分钟', seconds: 300 },
+    { key: '10m', label: '10 分钟', seconds: 600 },
+    { key: '30m', label: '30 分钟', seconds: 1800 },
+    { key: '1h', label: '1 小时', seconds: 3600 },
+    { key: '6h', label: '6 小时', seconds: 21600 },
+    { key: '24h', label: '24 小时', seconds: 86400 }
+  ];
+
+  function parseStatsSwap(log, currentBlock, secPerBlock, nowTs) {
+    try {
+      const words = (log.data || '').slice(2).match(/.{64}/g) || [];
+      if (words.length < 5) return null;
+      const amount0 = BigInt.asIntN(128, BigInt('0x' + words[0]));
+      const amount1 = BigInt.asIntN(128, BigInt('0x' + words[1]));
+      const sqrt = BigInt('0x' + words[2]);
+      const tick = int24(BigInt('0x' + words[4]));
+      const block = Number(BigInt(log.blockNumber));
+      const ts = nowTs - Math.max(0, currentBlock - block) * secPerBlock;
+      const h = state.market?.price;
+      const k = kntqUsd();
+      if (!(h > 0) || !(k > 0)) return null;
+      const side0 = Math.abs(Number(ethers.formatUnits(amount0, 18))) * h;
+      const side1 = Math.abs(Number(ethers.formatUnits(amount1, 18))) * k;
+      const vol = Math.max(side0, side1);
+      return { ts, tick, vol, sqrt, block };
+    } catch (_) { return null; }
+  }
+
+  function statsBucketVolume(swaps, nowTs, seconds) {
+    let volume = 0; let count = 0;
+    for (const s of swaps) if (nowTs - s.ts <= seconds) { volume += s.vol; count += 1; }
+    return { volume, count };
+  }
+
+  function renderStats(data) {
+    if (!data) return;
+    const hours = data.hours || 24;
+    if (ui.statsUpdated) ui.statsUpdated.textContent = hours + 'h · ' + data.swapCount + ' 笔';
+    if (ui.rangeAprGrid) {
+      ui.rangeAprGrid.innerHTML = data.ranges.map((r) => '<div class="apr-card"><span>±' + r.pct + '% 区间</span><strong class="' + (r.apr >= 0 ? 'gain' : 'loss') + '">' + fmtNum(r.apr, 1) + '%</strong><small>' + fmtUsdCompact(r.inVol) + ' 区间成交 · 估算日费 ' + fmtUsd(r.dailyFee, { digits: 2 }) + '<br>' + fmtUsd(r.lower * (state.market?.price || 0), { digits: 4 }) + ' – ' + fmtUsd(r.upper * (state.market?.price || 0), { digits: 4 }) + ' KNTQ/USDT</small></div>').join('');
+    }
+    if (ui.volumeStats) {
+      ui.volumeStats.innerHTML = STATS_WINDOWS.map((w) => {
+        const b = data.windows[w.key] || { volume: 0, count: 0 };
+        return '<div class="vol-card"><span>' + w.label + '</span><b>' + fmtUsdCompact(b.volume) + '</b><small>' + fmtUsd(b.volume * 0.01, { digits: 2 }) + ' fee · ' + b.count + ' 笔</small></div>';
+      }).join('');
+    }
+    if (ui.statsNote) {
+      ui.statsNote.textContent = 'APR 按最近 ' + hours + ' 小时成交、当前流动性和 $1,000 本金估算；' + (hours < 24 ? '样本不足 24h，已按时间外推。' : '不是承诺收益。');
+    }
+  }
+
+  async function loadStats() {
+    if (!state.config || !state.pool || !state.block || !ui.rangeAprGrid) return;
+    if (state.stats.loading) return;
+    if (state.stats.data && Date.now() - state.stats.at < 90000) { renderStats(state.stats.data); return; }
+    state.stats.loading = true;
+    if (ui.statsUpdated) ui.statsUpdated.textContent = '读取中…';
+    try {
+      const secPerBlock = await estimateBlockSeconds(state.block);
+      const nowTs = Number(state.block.timestamp) || Math.floor(Date.now() / 1000);
+      let hours = 24; let swaps = [];
+      for (const tryHours of [24, 6, 1]) {
+        hours = tryHours;
+        const span = Math.ceil(tryHours * 3600 / Math.max(0.02, secPerBlock));
+        const fromBlock = Math.max(Number(state.config.uniswap.deploymentBlock), state.block.number - span);
+        const logs = await getLogsChunked({
+          address: getAddress(state.config.uniswap.poolManager),
+          fromBlock: '0x' + fromBlock.toString(16),
+          toBlock: 'latest',
+          topics: [SWAP_TOPIC, state.config.uniswap.poolId]
+        }, 20000);
+        swaps = (logs || []).map((l) => parseStatsSwap(l, state.block.number, secPerBlock, nowTs)).filter(Boolean);
+        if (swaps.length) break;
+      }
+      const windows = {};
+      for (const w of STATS_WINDOWS) windows[w.key] = statsBucketVolume(swaps, nowTs, w.seconds);
+      const poolLiquidity = BigInt(await ethCall(getAddress(state.config.uniswap.stateView), callData(iface.state, 'getLiquidity', [state.config.uniswap.poolId])));
+      const ranges = [2, 5, 10].map((pct) => {
+        const range = M.rangeFromPercent(state.pool.tick, state.pool.tickSpacing, -pct, pct);
+        const inVol = swaps.filter((s) => s.tick >= range.lowerTick && s.tick < range.upperTick).reduce((sum, s) => sum + s.vol, 0);
+        const sqrtL = M.tickToSqrtRatioX96(range.lowerTick); const sqrtU = M.tickToSqrtRatioX96(range.upperTick);
+        const unit = M.amountsForLiquidity(10n ** 18n, sqrtL, sqrtU, state.pool.sqrtPriceX96);
+        const unitUsd = Number(ethers.formatUnits(unit.amount0, 18)) * (state.market?.price || 0) + Number(ethers.formatUnits(unit.amount1, 18)) * (kntqUsd() || 0);
+        const posL = unitUsd > 0 ? 1e18 * 1000 / unitUsd : 0;
+        const share = posL / Math.max(posL + Number(poolLiquidity), 1);
+        const annualFactor = 24 / hours;
+        const dailyFee = inVol * 0.01 * share * annualFactor;
+        const apr = 1000 > 0 ? dailyFee / 1000 * 365 * 100 : 0;
+        return { pct, lower: 1 / M.priceFromSqrtX96(sqrtU), upper: 1 / M.priceFromSqrtX96(sqrtL), inVol, dailyFee, apr };
+      });
+      const data = { at: Date.now(), hours, swapCount: swaps.length, windows, ranges };
+      state.stats.data = data; state.stats.at = Date.now();
+      renderStats(data);
+    } catch (error) {
+      if (ui.statsUpdated) ui.statsUpdated.textContent = '读取失败';
+      if (ui.statsNote) ui.statsNote.textContent = '成交量读取失败：' + decodeErr(error) + '。稍后刷新重试。';
+    } finally {
+      state.stats.loading = false;
+    }
+  }
+
+  function shortAddr(value) { return value ? value.slice(0, 6) + '…' + value.slice(-4) : ''; }
+
+  function renderWatch(owner, rows) {
+    if (!ui.watchGrid) return;
+    if (ui.watchMeta) ui.watchMeta.textContent = owner ? '观察 ' + shortAddr(owner) + ' · ' + rows.length + ' 个有效仓位' : '';
+    if (!rows.length) { ui.watchGrid.innerHTML = '<div class="watch-empty">这个地址在当前 KNTQ/HYPE 池没有有效仓位</div>'; return; }
+    ui.watchGrid.innerHTML = rows.map((p) => {
+      const lower = p.rangeLower * (state.market?.price || 0);
+      const upper = p.rangeUpper * (state.market?.price || 0);
+      return '<article class="watch-item"><div class="watch-item-head"><div><strong>#' + p.tokenId + '</strong><span class="pair">KNTQ/HYPE</span></div><span class="badge ' + (p.inRange ? 'green' : 'amber') + '">' + (p.inRange ? '在区间' : '出区间') + '</span></div><div class="watch-item-grid"><span>本金 <b>' + (p.principalUsd == null ? '—' : fmtUsd(p.principalUsd)) + '</b></span><span>待领 <b>' + (p.feesUsd == null ? '—' : fmtUsd(p.feesUsd)) + '</b></span><span>区间 <b>' + fmtUsd(lower, { digits: 4 }) + '–' + fmtUsd(upper, { digits: 4 }) + '</b></span><span>当前总价值 <b>' + (p.principalUsd == null ? '—' : fmtUsd(p.principalUsd + (p.feesUsd || 0))) + '</b></span></div></article>';
+    }).join('');
+  }
+
+  async function loadWatch() {
+    if (!ui.watchInput || !state.config) return;
+    const raw = ui.watchInput.value.trim();
+    if (!raw) { toast('请输入地址或 NFT', '例如 0x... 或 3183。', 'error'); return; }
+    if (!state.block || !state.pool) { toast('数据还没准备好', '稍等几秒再试。', 'error'); return; }
+    state.watch.loading = true;
+    if (ui.watchBtn) ui.watchBtn.disabled = true;
+    try {
+      const owner = getAddress(raw);
+      const res = await readPositions(state.block, owner);
+      const rows = (res.positions || []).filter((p) => !p.closed);
+      state.watch.owner = owner;
+      renderWatch(owner, rows);
+    } catch (error) {
+      if (ui.watchMeta) ui.watchMeta.textContent = '读取失败：' + decodeErr(error);
+      if (ui.watchGrid) ui.watchGrid.innerHTML = '';
+    } finally {
+      state.watch.loading = false;
+      if (ui.watchBtn) ui.watchBtn.disabled = false;
+    }
+  }
+
+  let statsTimer = null;
+  function scheduleStats() {
+    clearTimeout(statsTimer);
+    statsTimer = setTimeout(() => { loadStats().catch(() => {}); }, 2500);
   }
 
   let chartTimer = null;
@@ -2428,7 +2599,6 @@
     if (ui.slippageInput) ui.slippageInput.addEventListener('input', () => { state.compose.slippagePct = parseFloatSafe(ui.slippageInput.value); updateComposeUi(); scheduleQuote(); });
     if (ui.previewBtn) ui.previewBtn.addEventListener('click', () => { previewBuild().catch((error) => toast('预览失败', decodeErr(error), 'error')); });
     if (ui.emptyComposeBtn) ui.emptyComposeBtn.addEventListener('click', () => { const node = ui.hypeInput || ui.composer; if (node) node.focus(); });
-    if (ui.refreshBalBtn) ui.refreshBalBtn.addEventListener('click', async () => { try { await refreshBalances(); scheduleQuote(true); toast('余额已刷新', '已重新读取钱包余额。', 'success'); } catch (error) { toast('余额刷新失败', decodeErr(error), 'error'); } });
     if (ui.reauthBtn) ui.reauthBtn.addEventListener('click', openReauth);
     if (ui.hypeRefSave) ui.hypeRefSave.addEventListener('click', () => {
       const value = Number(ui.hypeRefInput?.value || 0);
@@ -2445,6 +2615,9 @@
     if (ui.rangeMax) ui.rangeMax.addEventListener('input', applySliderTicks);
     if (ui.rangeZoomIn) ui.rangeZoomIn.addEventListener('click', () => zoomCustomRange(0.75));
     if (ui.rangeZoomOut) ui.rangeZoomOut.addEventListener('click', () => zoomCustomRange(1.33));
+    if (ui.watchBtn) ui.watchBtn.addEventListener('click', () => loadWatch());
+    if (ui.watchInput) ui.watchInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') loadWatch(); });
+    if (ui.watchClear) ui.watchClear.addEventListener('click', () => { if (ui.watchInput) ui.watchInput.value = ''; if (ui.watchMeta) ui.watchMeta.textContent = ''; if (ui.watchGrid) ui.watchGrid.innerHTML = ''; state.watch.owner = null; });
     ui.positionsGrid.addEventListener('click', (event) => {
       const btn = event.target.closest('button[data-action]');
       if (!btn) return;
@@ -2510,6 +2683,9 @@
     setInterval(poll, Number(state.config.ui.pollSeconds || 12) * 1000);
     setInterval(checkPositionBalance, 15000);
     setInterval(fastPriceRefresh, 20000);
+    balanceTimer = setInterval(() => autoRefreshBalances(false), 20000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && state.wallet.address) autoRefreshBalances(true); });
+    window.addEventListener('focus', () => { if (state.wallet.address) autoRefreshBalances(true); });
   }
 
   init();

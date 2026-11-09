@@ -34,6 +34,15 @@
   </div>
 
   <main class="container">
+    <nav class="section-nav" id="sectionNav" aria-label="页面导航">
+      <a href="#positionsPanel">我的仓位</a>
+      <a href="#buildCard">添加流动性</a>
+      <a href="#rangeStatsCard">区间年化 &amp; 成交量</a>
+      <a href="#watchCard">观察别人仓位</a>
+      <a href="#distributionCard">流动性分布</a>
+      <a href="#hypeCard">HYPE 本金资产计算</a>
+    </nav>
+
     <section class="pool-head">
       <div>
         <h2>KNTQ / HYPE <span class="fee-badge">1%</span></h2>
@@ -65,7 +74,7 @@
       <div><span>5 分钟 / 30 分钟年化</span><strong id="shortApr">—</strong><small>每 60 秒同步一次</small></div>
     </section>
 
-    <section class="card positions-panel dashboard-positions">
+    <section class="card positions-panel dashboard-positions" id="positionsPanel">
       <div class="card-head">
         <h3>我的仓位</h3>
         <div class="tools">
@@ -91,36 +100,11 @@
     </section>
 
 
-    <section class="card distribution-card">
-      <div class="distribution-head">
-        <div><h3>流动性分布</h3><p>KNTQ / USDT · 由 KNTQ/HYPE 池按 HYPE/USDT 折算</p></div>
-        <div class="dist-tabs"><button type="button" class="active">流动性</button><span class="fee-badge" id="distributionTag">当前</span></div>
-      </div>
-      <div class="distribution-body">
-        <div class="distribution-main">
-          <div class="distribution-price"><span>1 KNTQ =</span><strong id="distCurrentPrice">—</strong><em>USDT</em><b id="distAltPrice">—</b></div>
-          <div class="distribution-chart" id="liquidityBars"><div class="dist-empty">读取中…</div></div>
-          <div class="distribution-axis" id="distributionAxis"></div>
-          <div class="liquidity-table" id="liquidityTable"></div>
-        </div>
-        <aside class="distribution-stats">
-          <h4>统计数据</h4>
-          <div class="dist-stat"><span>当前价格</span><b id="distStatPrice">—</b></div>
-          <div class="dist-stat"><span>活跃流动性</span><b id="distActiveLiquidity">—</b></div>
-          <div class="dist-stat"><span>主区间</span><b id="distMainRange">—</b></div>
-          <div class="dist-stat"><span>主区间占比</span><b id="distMainShare">—</b></div>
-          <div class="dist-stat"><span>扫描区间</span><b id="distCount">—</b></div>
-          <div class="dist-stat"><span>HYPE / USDT</span><b id="distHypePrice">—</b></div>
-          <div class="dist-legend"><i></i><span>橙色为当前价格所在区间</span></div>
-        </aside>
-      </div>
-    </section>
-
     <section class="card build-card" id="buildCard">
       <div class="card-head"><div><h3>添加流动性</h3><small>KNTQ/HYPE · Uniswap V4 · 1% · 自由输入任意一侧</small></div><span class="fee-badge">V4 · 1%</span></div>
       <div class="build-body" id="composer">
         <div class="build-form">
-          <div class="build-wallet"><span>钱包 HYPE <b id="buildHypeBal">—</b></span><span>KNTQ <b id="buildKntqBal">—</b></span><span id="authState">授权：—</span><button id="reauthBtn" type="button" hidden>重新授权</button><button id="refreshBalBtn" type="button">刷新余额</button></div>
+          <div class="build-wallet"><span>钱包 HYPE <b id="buildHypeBal">—</b></span><span>KNTQ <b id="buildKntqBal">—</b></span><span id="authState">授权：—</span><button id="reauthBtn" type="button" hidden>重新授权</button><span id="balanceAutoHint" class="balance-auto-hint">余额自动刷新</span></div>
           <div class="build-inputs">
             <label class="build-input"><span>HYPE</span><div><input id="hypeInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxHypeBtn" type="button">MAX</button></div></label>
             <label class="build-input"><span>KNTQ</span><div><input id="kntqInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxKntqBtn" type="button">MAX</button></div></label>
@@ -129,6 +113,7 @@
           <div class="build-range">
             <div class="build-label">价格区间</div>
             <div class="range-presets" id="rangePresets">
+              <button type="button" data-preset="2">±2%</button>
               <button type="button" data-preset="5">±5%</button>
               <button type="button" data-preset="10">±10%</button>
               <button type="button" data-preset="25">±25%</button>
@@ -163,8 +148,54 @@
         </aside>
       </div>
     </section>
+    <section class="card range-stats-card" id="rangeStatsCard">
+      <div class="card-head"><div><h3>区间年化 & 成交量</h3><small>按当前池 24 小时成交估算 · 0 仓位也能参考</small></div><span class="fee-badge" id="statsUpdated">读取中…</span></div>
+      <div class="stats-two-col">
+        <div class="stats-block">
+          <div class="stats-block-head"><h4>同区间估算 APR</h4><span>$1,000 本金 · 1% fee</span></div>
+          <div class="range-apr-grid" id="rangeAprGrid"><div class="stats-loading">读取成交历史中…</div></div>
+        </div>
+        <div class="stats-block">
+          <div class="stats-block-head"><h4>成交与手续费</h4><span>过去各时间窗口</span></div>
+          <div class="volume-grid" id="volumeStats"><div class="stats-loading">读取成交历史中…</div></div>
+        </div>
+      </div>
+      <div class="stats-note" id="statsNote">APR 为按历史成交和当前流动性估算，不是承诺收益。</div>
+    </section>
 
-    <section class="card hype-card">
+    <section class="card watch-card" id="watchCard">
+      <div class="card-head"><div><h3>观察别人的仓位</h3><small>输入钱包地址 · 只读，不会发起交易</small></div><span class="fee-badge" id="watchBadge">只读</span></div>
+      <div class="watch-form"><input id="watchInput" placeholder="0x 钱包地址" autocomplete="off"><button class="btn small" id="watchBtn" type="button">查看</button><button class="btn small" id="watchClear" type="button">清除</button></div>
+      <div class="watch-meta" id="watchMeta"></div>
+      <div class="watch-grid" id="watchGrid"></div>
+    </section>
+
+    <section class="card distribution-card" id="distributionCard">
+      <div class="distribution-head">
+        <div><h3>流动性分布</h3><p>KNTQ / USDT · 由 KNTQ/HYPE 池按 HYPE/USDT 折算</p></div>
+        <div class="dist-tabs"><button type="button" class="active">流动性</button><span class="fee-badge" id="distributionTag">当前</span></div>
+      </div>
+      <div class="distribution-body">
+        <div class="distribution-main">
+          <div class="distribution-price"><span>1 KNTQ =</span><strong id="distCurrentPrice">—</strong><em>USDT</em><b id="distAltPrice">—</b></div>
+          <div class="distribution-chart" id="liquidityBars"><div class="dist-empty">读取中…</div></div>
+          <div class="distribution-axis" id="distributionAxis"></div>
+          <div class="liquidity-table" id="liquidityTable"></div>
+        </div>
+        <aside class="distribution-stats">
+          <h4>统计数据</h4>
+          <div class="dist-stat"><span>当前价格</span><b id="distStatPrice">—</b></div>
+          <div class="dist-stat"><span>活跃流动性</span><b id="distActiveLiquidity">—</b></div>
+          <div class="dist-stat"><span>主区间</span><b id="distMainRange">—</b></div>
+          <div class="dist-stat"><span>主区间占比</span><b id="distMainShare">—</b></div>
+          <div class="dist-stat"><span>扫描区间</span><b id="distCount">—</b></div>
+          <div class="dist-stat"><span>HYPE / USDT</span><b id="distHypePrice">—</b></div>
+          <div class="dist-legend"><i></i><span>橙色为当前价格所在区间</span></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="card hype-card" id="hypeCard">
       <div class="card-head"><div><h3>HYPE 本位资产</h3><small>跨链合计 · 当前价值折合 HYPE</small></div><span class="hype-ref-edit"><span>参考</span><input id="hypeRefInput" type="number" inputmode="decimal" step="0.01" placeholder="0"><button id="hypeRefSave" type="button">保存</button></span></div>
       <div class="hype-grid">
         <div class="hype-cell"><span>Elysium 钱包</span><strong id="hypeEly">—</strong><small>HYPE + KNTQ 折合</small></div>
@@ -190,6 +221,6 @@
   <script src="vendor/ethers.umd.min.js"></script>
   <script src="math.js"></script>
   <script src="abi.js"></script>
-  <script src="app.js?v=20261110-2565"></script>
+  <script src="app.js?v=20261110-2585"></script>
 </body>
 </html>

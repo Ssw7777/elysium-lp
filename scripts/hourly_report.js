@@ -199,17 +199,17 @@ function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function transientRpcError(error) {
   const message = String(error?.message || error || '').toLowerCase();
-  return /429|too many requests|rate limit|exceeded maximum retry|timeout|bad gateway|502|503|504|missing response|could not coalesce/.test(message);
+  return /429|too many requests|rate limit|exceeded maximum retry|timeout|bad gateway|502|503|504|missing response|could not coalesce|missing revert data|call revert exception|could not decode result data/.test(message);
 }
 
-async function rpcRetry(fn, label, attempts = 4) {
+async function rpcRetry(fn, label, attempts = 6) {
   let last = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try { return await fn(); }
     catch (error) {
       last = error;
       if (!transientRpcError(error) || attempt >= attempts - 1) throw error;
-      const wait = 350 * (attempt + 1);
+      const wait = 500 * (attempt + 1);
       console.log('[retry]', label, 'attempt', attempt + 1, 'wait', wait);
       await sleep(wait);
     }

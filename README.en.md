@@ -6,12 +6,13 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. Chain 
 
 - Reads real V4 pool state, positions, ticks and liquidity distribution from Elysium.
 - Entry value, current value, net PnL, impermanent loss (IL), pending fees and **claimed fees**.
-- Claimed fees stay in PnL until the position is fully withdrawn; the position card shows the cumulative claimed USD amount.
-- 5m / 30m / 1h APR, next-day estimated yield and a 60-second refresh.
+- Claimed fees stay in PnL until an optional empty-NFT burn; a normal full withdrawal does not clear them. The position card shows the cumulative claimed USD amount.
+- 5m / 30m / 1h APR, next-day estimated yield, a 20-second price/valuation refresh and a 60-second full position scan.
 - Uniswap-style KNTQ/USDT liquidity distribution: current-price highlight, statistics panel and range table.
 - Direct KNTQ/USDT OKX chart link in the header; OKX blocks iframe embedding (`X-Frame-Options: DENY`), so it opens in a new tab.
 - HYPE-denominated strip at the bottom: Elysium wallet + LP principal + HyperEVM wallet, with an optional reference amount.
-- Add-liquidity panel: free input on either side, auto-ratio, range presets/custom range, slippage preview, Permit2 approvals and V4 mint.
+- Add-liquidity panel: free input on either side, auto-ratio, ±2/±5/±10/±25/±50/full/custom ranges, slippage preview, Permit2 approvals and V4 mint; wallet balances refresh automatically.
+- Sticky section navigation, ±2/5/10% range APR estimates, 5m–24h volume/fee windows and a read-only watched-address panel.
 - Optional browser-wallet mode for claiming fees and withdrawing liquidity. OKX Wallet's built-in Elysium network is supported; the app does not create a custom network on OKX.
 - A 15-second PositionManager `balanceOf` watcher detects new positions, then re-reads logs.
 - Optional periodic Bark report with pending fees, net PnL, claimed fees, range distance, HYPE total and timestamp.
@@ -92,7 +93,7 @@ A systemd timer such as `OnCalendar=*:0/5` gives a five-minute cadence. Keep `BA
 ## Limitations
 
 - Single pool: KNTQ/HYPE. Other-pool dashboards are not included.
-- Adding liquidity is not part of this repository; use another tool.
+- Built-in add-liquidity panel; there is no automatic swap, rebalancing or transaction retry.
 - Entry value is approximate if liquidity was added after mint.
 - Claimed-fee history starts when this journal feature is deployed. Claims made directly in a wallet or before the feature are not reconstructed automatically.
 - HYPE/USD and KNTQ/USD are market estimates, not execution guarantees.
