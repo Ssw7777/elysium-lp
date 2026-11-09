@@ -4,6 +4,8 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. On-cha
 
 一个 **Elysium 主网（chainId 99901）KNTQ/HYPE Uniswap V4 流动性看板**。链上数据只读；领取手续费或撤池时由浏览器钱包签名，服务端不接触私钥。
 
+> **仅自用，搞着玩，DYOR。** Personal use only, experimental; do your own research. Nothing here is financial advice. Never commit private keys, API keys or seed phrases.
+
 - [中文说明](README.zh-CN.md)
 - [English documentation](README.en.md)
 
