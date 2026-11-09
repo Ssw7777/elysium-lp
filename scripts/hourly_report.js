@@ -178,6 +178,7 @@ async function runReport(rpcUrl) {
 
   const cache = loadCache();
   const rows = [];
+  let failedPositions = 0;
   const claimBook = loadClaims()[OWNER.toLowerCase()] || {};
   for (const id of ids) {
     try {
@@ -244,15 +245,17 @@ async function runReport(rpcUrl) {
         distDown: currentUsd > 0 ? (currentUsd / lowerUsd - 1) * 100 : null
       });
     } catch (error) {
+      failedPositions += 1;
       console.log('[position]', id, String(error.message || error).slice(0, 120));
     }
   }
+  if (failedPositions > 0) throw new Error('position read incomplete: ' + failedPositions + ' failed; refusing partial report');
   saveCache(cache);
 
   const totalFees = rows.reduce((sum, row) => sum + (row.feeUsd || 0), 0);
   const totalHype = rows.reduce((sum, row) => sum + row.feeHype, 0);
   const totalKntq = rows.reduce((sum, row) => sum + row.feeKntq, 0);
-  const totalClaimed = rows.reduce((sum, row) => sum + (row.claimedUsd || 0), 0);
+  const totalClaimed = Object.values(claimBook).reduce((sum, row) => sum + Number(row.usd || 0), 0);
   const pnlRows = rows.filter((row) => row.pnl != null);
   const totalPnl = pnlRows.length ? pnlRows.reduce((sum, row) => sum + row.pnl, 0) : null;
   const title = rows.length ? `💧 Elysium LP 待领 ${fmtUsd(totalFees)}` : '💧 Elysium LP 待领 $0.00';
@@ -271,9 +274,9 @@ async function runReport(rpcUrl) {
   }
   let hypeLine = 'HYPE合计 —';
   try {
-    const elyHype = Number(ethers.formatUnits(await provider.getBalance(OWNER), 18));
+    const elyHype = Number(ethers.formatUnits(await nativeBalance(OWNER), 18));
     const hyperHype = Number(ethers.formatUnits(await hyperEvmBalance(OWNER), 18));
-    const lpUsd = rows.reduce((sum, row) => sum + (row.principalUsd || 0), 0);
+    const lpUsd = rows.reduce((sum, row) => sum + (row.principalUsd || 0) + (row.feeUsd || 0), 0);
     const lpHype = hypeUsd > 0 ? lpUsd / hypeUsd : null;
     if (lpHype != null) {
       const totalHype = elyHype + lpHype + hyperHype;
@@ -293,6 +296,32 @@ async function runReport(rpcUrl) {
   await postBark(title, lines.join('\n'));
 }
 
+async function nativeBalance(owner) {
+  let lastError = null;
+  // Prefer the secondary RPC for the periodic job: the official endpoint
+  // rate-limits bursts, while the fallback keeps full position reads.
+  const reportEndpoints = [...CONFIG.network.rpcUrls].reverse();
+  for (const endpoint of reportEndpoints) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch(endpoint.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getBalance', params: [owner, 'latest'] }),
+          signal: controller.signal
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const payload = await response.json();
+        if (!payload || payload.error || typeof payload.result !== 'string') throw new Error('balance failed');
+        return BigInt(payload.result);
+      } finally { clearTimeout(timer); }
+    } catch (error) { lastError = error; console.log('[balance]', endpoint.name, String(error.message || error).slice(0, 100)); }
+  }
+  throw lastError || new Error('no balance RPC');
+}
+
 async function hyperEvmBalance(owner) {
   const response = await fetch('https://rpc.hyperliquid.xyz/evm', {
     method: 'POST',
@@ -308,7 +337,8 @@ async function hyperEvmBalance(owner) {
 async function main() {
   if (!OWNER.startsWith('0x') || OWNER.length !== 42) throw new Error('DEFAULT_ADDRESS invalid');
   let lastError = null;
-  for (const endpoint of CONFIG.network.rpcUrls) {
+  const reportEndpoints = [...CONFIG.network.rpcUrls].reverse();
+  for (const endpoint of reportEndpoints) {
     try {
       console.log('[rpc]', endpoint.name);
       await runReport(endpoint.url);

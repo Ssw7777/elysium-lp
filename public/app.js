@@ -569,7 +569,7 @@
     const ref = Number(state.config?.ui?.hypeReference || 0);
     if (ui.hypeRefBadge) ui.hypeRefBadge.textContent = ref > 0 ? '参考 ' + fmtNum(ref, 2) : '实时';
     const active = state.positions.filter((p) => !p.closed);
-    const lpUsd = active.reduce((sum, p) => sum + (p.principalUsd || 0), 0);
+    const lpUsd = active.reduce((sum, p) => sum + (p.principalUsd || 0) + (p.feesUsd || 0), 0);
     const hypeUsd = state.market?.price;
     const connected = !!state.wallet.address;
     const ely = connected ? Number(ethers.formatUnits(state.balances.hype, 18)) : null;

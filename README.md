@@ -90,7 +90,7 @@ If you use systemd, a timer such as `OnCalendar=*:0/5` gives a five-minute caden
 - Entry value uses the mint block's `getSlot0`/`getPositionLiquidity` and Hyperliquid HYPE 1h candles.
 - KNTQ/USDT is derived from the KNTQ/HYPE pool price times HYPE/USDT. It is not a separate KNTQ/USDT pool.
 - Liquidity distribution uses `StateView.getTickBitmap` + `getTickLiquidity`.
-- HYPE total = Elysium wallet HYPE + LP principal value converted to HYPE + HyperEVM (chain 999) wallet HYPE. Pending/claimed fees are tracked separately.
+- HYPE total = Elysium wallet HYPE + LP current value (principal + pending fees) converted to HYPE + HyperEVM (chain 999) wallet HYPE. Claimed fees are tracked separately.
 
 ## Limitations / 限制
 
