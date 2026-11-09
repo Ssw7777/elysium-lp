@@ -100,7 +100,7 @@ The 5-minute report also evaluates the **freshly read current positions**:
 
 - **Out of range**: alert when a live position leaves its range; repeat at most every 30 minutes while it stays out; clear the alert state when it returns, is withdrawn, burned or has zero liquidity.
 - **5m APR > 20,000%**: alert when the 5-minute fee-growth APR crosses the threshold; repeat at most every 30 minutes.
-- Alerts are skipped if the position set is incomplete, so a stale/removed range is never used. Alert state is private and stored outside the repository.
+- Alerts are skipped if the position set is incomplete, so a stale/removed range is never used. When all LP positions are gone, one final **“Elysium LP 已清空”** notice is sent and periodic reports pause; a new LP automatically resumes them. Alert state is private and stored outside the repository.
 
 ## Data and formulas / 数据说明
 

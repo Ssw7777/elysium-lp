@@ -452,6 +452,30 @@ async function runReport(rpcUrl) {
   saveActiveState(rows.map((row) => row.id), closedMap);
   console.log('[positions]', rows.map((row) => '#' + row.id).join(' ') || '(none)');
 
+  // A single clear notice, then stay quiet until a new LP appears.
+  const alertState = loadAlertState();
+  if (!rows.length) {
+    const hadActive = knownActive.length > 0;
+    if (!alertState.paused) {
+      if (hadActive) {
+        if (DRY_RUN) console.log('[alert] DRY_RUN LP cleared');
+        else await postBark('🧹 Elysium LP 已清空', '所有 LP 仓位已提出或流动性已归零。\nBark 报表已暂停；检测到新仓位后会自动恢复。\n' + new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
+      }
+      alertState.paused = true;
+      alertState.clearedNotified = true;
+      if (!DRY_RUN) saveAlertState(alertState);
+    } else {
+      console.log('[report] LP empty and paused; skip Bark');
+    }
+    return;
+  }
+  if (alertState.paused) {
+    alertState.paused = false;
+    alertState.clearedNotified = false;
+    if (!DRY_RUN) saveAlertState(alertState);
+    console.log('[report] new LP detected; resume Bark');
+  }
+
   const totalFees = rows.reduce((sum, row) => sum + (row.feeUsd || 0), 0);
   const totalFeeHypeAmt = rows.reduce((sum, row) => sum + row.feeHype, 0);
   const totalFeeKntqAmt = rows.reduce((sum, row) => sum + row.feeKntq, 0);
