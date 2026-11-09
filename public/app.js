@@ -710,7 +710,9 @@
     const lpUsd = active.reduce((sum, p) => sum + (p.principalUsd || 0) + (p.feesUsd || 0), 0);
     const hypeUsd = state.market?.price;
     const connected = !!state.wallet.address;
-    const ely = connected ? Number(ethers.formatUnits(state.balances.hype, 18)) : null;
+    const kUsd = kntqUsd();
+    const kntqHype = connected && kUsd > 0 && hypeUsd > 0 ? Number(ethers.formatUnits(state.balances.kntq, 18)) * kUsd / hypeUsd : null;
+    const ely = connected ? Number(ethers.formatUnits(state.balances.hype, 18)) + kntqHype : null;
     const hyper = state.hyperEvmHype == null ? null : Number(ethers.formatUnits(state.hyperEvmHype, 18));
     const lp = hypeUsd > 0 ? lpUsd / hypeUsd : null;
     const total = ely == null || hyper == null || lp == null ? null : ely + hyper + lp;

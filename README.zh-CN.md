@@ -89,7 +89,7 @@ systemd 可用 `OnCalendar=*:0/5` 实现 5 分钟一次。`BARK_KEY` 放在权�
 - 投入价值：建仓区块的 `getSlot0` + `getPositionLiquidity`，HYPE 历史价用 Hyperliquid 1h K 线。
 - KNTQ/USDT 由 KNTQ/HYPE 池价 × HYPE/USDT 折算，不是独立 KNTQ/USDT 池。
 - 流动性分布：`StateView.getTickBitmap` + `getTickLiquidity`。
-- HYPE 合计 = Elysium 钱包 HYPE + LP 现值（本金 + 待领手续费）折合 HYPE + HyperEVM（chain 999）钱包 HYPE。已领手续费单独统计。
+- HYPE 合计 = Elysium 钱包（HYPE + 钱包 KNTQ 折合）+ LP 现值（本金 + 待领手续费）+ HyperEVM（chain 999）钱包 HYPE。已领手续费已在钱包里。
 
 ## 限制
 

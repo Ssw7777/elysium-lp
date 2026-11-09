@@ -15,6 +15,9 @@ const CACHE_FILE = process.env.ENTRY_CACHE || path.join(process.env.HOME || '/tm
 const CLAIMS_FILE = process.env.CLAIMS_FILE || path.join(process.env.HOME || '/tmp', '.elysium-lp-claims.json');
 
 const ABI = {
+  erc20: [
+    'function balanceOf(address) view returns (uint256)'
+  ],
   pm: [
     'function ownerOf(uint256 tokenId) view returns (address)',
     'function getPoolAndPositionInfo(uint256 tokenId) view returns ((address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey,uint256 info)',
@@ -274,7 +277,12 @@ async function runReport(rpcUrl) {
   }
   let hypeLine = 'HYPE合计 —';
   try {
-    const elyHype = Number(ethers.formatUnits(await nativeBalance(OWNER), 18));
+    const kntq = new ethers.Contract(CONFIG.tokens.KNTQ.address, ABI.erc20, provider);
+    const [nativeHype, kntqWallet] = await Promise.all([
+      nativeBalance(OWNER),
+      kntq.balanceOf(OWNER)
+    ]);
+    const elyHype = Number(ethers.formatUnits(nativeHype, 18)) + (hypeUsd > 0 ? Number(ethers.formatUnits(kntqWallet, 18)) * kntqUsd / hypeUsd : 0);
     const hyperHype = Number(ethers.formatUnits(await hyperEvmBalance(OWNER), 18));
     const lpUsd = rows.reduce((sum, row) => sum + (row.principalUsd || 0) + (row.feeUsd || 0), 0);
     const lpHype = hypeUsd > 0 ? lpUsd / hypeUsd : null;
