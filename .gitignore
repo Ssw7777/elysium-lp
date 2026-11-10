@@ -1,0 +1,35 @@
+# secrets / machine-local files
+.env
+.env.*
+*.local.json
+config.local.json
+*.pem
+*.key
+*.p12
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# build / backups
+*.bak
+*.bak.*
+.tmp/
+logs/
+
+# local claimed-fee journal
+.elysium-lp-claims.json
+data/claims.json
