@@ -29,11 +29,11 @@
 ```bash
 git clone https://github.com/Ssw7777/elysium-lp-26-11-9.git
 cd elysium-lp
-python3 server.py --no-open --port 8097
+python3 app/server.py --no-open --port 8097
 # 打开 http://127.0.0.1:8097/elysium-lp/
 ```
 
-无需第三方 Python 包；ethers.js 已放在 `public/vendor/`。
+无需第三方 Python 包；ethers.js 已放在 `app/public/vendor/`。
 
 ## 配置
 
@@ -68,12 +68,12 @@ PnL 口径：
 
 ## 可选 Bark 定时报告
 
-`scripts/hourly_report.js` 是可选只读 Node.js 任务。为了兼容保留了文件名；可以按任意间隔运行，例如每 5 分钟：
+`app/scripts/hourly_report.js` 是可选只读 Node.js 任务。为了兼容保留了文件名；可以按任意间隔运行，例如每 5 分钟：
 
 ```bash
 export BARK_KEY="你的 Bark key"
 export DEFAULT_ADDRESS="0x..."
-node scripts/hourly_report.js
+node app/scripts/hourly_report.js
 ```
 
 消息包含待领手续费、净 PnL、已领手续费、区间距离、HYPE 合计和时间。`isArchive: 1` 会保留历史；脚本只读链上数据。

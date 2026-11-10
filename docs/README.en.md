@@ -29,15 +29,15 @@ The server never asks for a mnemonic or private key and never broadcasts a trans
 ```bash
 git clone https://github.com/Ssw7777/elysium-lp-26-11-9.git
 cd elysium-lp
-python3 server.py --no-open --port 8097
+python3 app/server.py --no-open --port 8097
 # open http://127.0.0.1:8097/elysium-lp/
 ```
 
-No third-party Python packages are required. The ethers.js browser bundle is vendored under `public/vendor/`.
+No third-party Python packages are required. The ethers.js browser bundle is vendored under `app/public/vendor/`.
 
 ## Configuration
 
-Edit `config.json`:
+Edit `app/config.json`:
 
 - `network.rpcUrls`: official Elysium RPC.
 - `uniswap.*`: public pool, PoolManager, StateView and PositionManager addresses.
@@ -46,7 +46,7 @@ Edit `config.json`:
 - `ui.hyperEvmRpc`: HyperEVM RPC for the HYPE wallet balance.
 - `safety.*`: stale thresholds and display limits.
 
-Never put private keys, exchange API keys, Bark keys or personal server details in `config.json`.
+Never put private keys, exchange API keys, Bark keys or personal server details in `app/config.json`.
 
 ## Claimed-fee journal
 
@@ -68,12 +68,12 @@ The journal contains no keys, but it is still private data. **Put the app behind
 
 ## Optional periodic Bark report
 
-`scripts/hourly_report.js` is an optional read-only Node.js job. The filename is kept for compatibility; run it at any interval, for example every five minutes:
+`app/scripts/hourly_report.js` is an optional read-only Node.js job. The filename is kept for compatibility; run it at any interval, for example every five minutes:
 
 ```bash
 export BARK_KEY="your-bark-key"
 export DEFAULT_ADDRESS="0x..."
-node scripts/hourly_report.js
+node app/scripts/hourly_report.js
 ```
 
 It sends pending fees, net PnL, claimed fees, range distance, HYPE total and timestamp. `isArchive: 1` keeps the message in Bark history. The script never signs transactions.

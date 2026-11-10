@@ -6,8 +6,17 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. On-cha
 
 > **仅自用，搞着玩，DYOR。** Personal use only, experimental; do your own research. Nothing here is financial advice. Never commit private keys, API keys or seed phrases.
 
-- [中文说明](README.zh-CN.md)
-- [English documentation](README.en.md)
+- [中文说明](docs/README.zh-CN.md)
+- [English documentation](docs/README.en.md)
+
+## Repository layout
+
+```text
+app/             server, UI, config, scripts and tests
+docs/            translated README files
+```
+
+Run the app from the repository root with `python3 app/server.py`.
 
 ## Features / 功能
 
@@ -45,15 +54,17 @@ In the default configuration `ui.defaultAddress` is empty, so the page starts in
 ```bash
 git clone https://github.com/Ssw7777/elysium-lp-26-11-9.git
 cd elysium-lp
-python3 server.py --no-open --port 8097
+python3 app/server.py --no-open --port 8097
+# tests
+python3 -m unittest discover -s app/tests
 # open http://127.0.0.1:8097/elysium-lp/
 ```
 
-No third-party Python packages are required. The ethers.js browser bundle is vendored under `public/vendor/`.
+No third-party Python packages are required. The ethers.js browser bundle is vendored under `app/public/vendor/`.
 
 ## Configuration / 配置
 
-Edit `config.json`:
+Edit `app/config.json`:
 
 - `network.rpcUrls`: official Elysium RPC.
 - `uniswap.*`: public pool, PoolManager, StateView and PositionManager addresses.
@@ -62,7 +73,7 @@ Edit `config.json`:
 - `ui.hyperEvmRpc`: HyperEVM RPC used for the HYPE wallet balance.
 - `safety.*`: stale thresholds and display limits.
 
-Never put private keys, exchange API keys, Bark keys or personal server details in `config.json`.
+Never put private keys, exchange API keys, Bark keys or personal server details in `app/config.json`.
 
 ## Claimed-fee journal / 已领手续费记录
 
@@ -84,12 +95,12 @@ A full withdrawal uses `DECREASE_LIQUIDITY + TAKE_PAIR` and **does not burn the 
 
 ## Optional periodic Bark report / Bark 定时报告
 
-`scripts/hourly_report.js` is an optional read-only Node.js job. The filename is kept for compatibility; run it at any interval, for example every 5 minutes:
+`app/scripts/hourly_report.js` is an optional read-only Node.js job. The filename is kept for compatibility; run it at any interval, for example every 5 minutes:
 
 ```bash
 export BARK_KEY="your-bark-key"
 export DEFAULT_ADDRESS="0x..."
-node scripts/hourly_report.js
+node app/scripts/hourly_report.js
 ```
 
 It sends pending fees, net PnL, claimed fees, range distance, HYPE total and timestamp. `isArchive: 1` keeps the message in Bark history. The script never signs transactions.
