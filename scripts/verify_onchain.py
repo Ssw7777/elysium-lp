@@ -52,33 +52,44 @@ def main() -> int:
             if size == 0:
                 raise RuntimeError(f"{name} has no code")
 
-        pool_id = config["uniswap"]["poolId"]
-        slot0_raw = rpc.eth_call(config["uniswap"]["stateView"], SEL_SLOT0 + pool_id[2:])
-        words = [slot0_raw[2:][i : i + 64] for i in range(0, len(slot0_raw[2:]), 64)]
-        sqrt_price = int(words[0], 16)
-        tick = int(words[1], 16)
-        if tick >= 1 << 23:
-            tick -= 1 << 24
-        lp_fee = int(words[3], 16)
-        liquidity_raw = rpc.eth_call(config["uniswap"]["stateView"], SEL_LIQUIDITY + pool_id[2:])
-        liquidity = int(liquidity_raw, 16)
+        def read_pool(pool_id: str, expected_fee: int) -> dict:
+            slot0_raw = rpc.eth_call(config["uniswap"]["stateView"], SEL_SLOT0 + pool_id[2:])
+            words = [slot0_raw[2:][i : i + 64] for i in range(0, len(slot0_raw[2:]), 64)]
+            sqrt_price = int(words[0], 16)
+            tick = int(words[1], 16)
+            if tick >= 1 << 23:
+                tick -= 1 << 24
+            lp_fee = int(words[3], 16)
+            liquidity_raw = rpc.eth_call(config["uniswap"]["stateView"], SEL_LIQUIDITY + pool_id[2:])
+            liquidity = int(liquidity_raw, 16)
+            if lp_fee != int(expected_fee):
+                raise RuntimeError(f"LP fee mismatch for {pool_id}")
+            if liquidity <= 0:
+                raise RuntimeError(f"pool has no liquidity: {pool_id}")
+            return {
+                "poolId": pool_id,
+                "tick": tick,
+                "sqrtPriceX96": str(sqrt_price),
+                "lpFee": lp_fee,
+                "liquidity": str(liquidity),
+                "rawPriceKntqPerHype": (sqrt_price / (1 << 96)) ** 2,
+            }
+
         manager_raw = rpc.eth_call(config["uniswap"]["stateView"], SEL_POOL_MANAGER)
         manager = "0x" + manager_raw[-40:]
-        report["pool"] = {
-            "poolId": pool_id,
-            "tick": tick,
-            "sqrtPriceX96": str(sqrt_price),
-            "lpFee": lp_fee,
-            "liquidity": str(liquidity),
-            "poolManager": manager,
-            "rawPriceKntqPerHype": (sqrt_price / (1 << 96)) ** 2,
-        }
-        if lp_fee != int(config["uniswap"]["fee"]):
-            raise RuntimeError("LP fee mismatch")
         if manager.lower() != config["uniswap"]["poolManager"].lower():
             raise RuntimeError("StateView poolManager mismatch")
-        if liquidity <= 0:
-            raise RuntimeError("pool has no liquidity")
+        pool_entries = config["uniswap"].get("pools") or [{
+            "poolId": config["uniswap"]["poolId"],
+            "fee": config["uniswap"]["fee"],
+        }]
+        report["pools"] = [read_pool(entry["poolId"], int(entry["fee"])) for entry in pool_entries]
+        for row in report["pools"]:
+            row["poolManager"] = manager
+        report["pool"] = next(
+            row for row in report["pools"]
+            if row["poolId"].lower() == config["uniswap"]["poolId"].lower()
+        )
 
         market = server.MarketCache(url=config["market"]["hypeUsdUrl"], ttl=0, stale_after=90)
         market_snapshot = market.get(force=True)

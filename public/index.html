@@ -14,7 +14,7 @@
   <header class="app-header">
     <div class="header-inner">
       <div class="brand">
-        <img class="brand-mark" src="0xstudy-avatar.jpg" alt="0xStudy">
+        <img class="brand-mark" src="0xstudy-avatar.jpg" alt="Elysium LP">
         <div><h1 id="appTitle">Elysium LP</h1><p id="appSubtitle">KNTQ / HYPE · 价格按 USDT 折算</p></div>
       </div>
       <div class="header-actions">
@@ -22,6 +22,7 @@
         <a class="pill chart-link" href="https://web3.okx.com/zh-hans/token/99901/0xe45a355d9e9cad2ad85f2d03e3ee3102a036acf0" target="_blank" rel="noopener noreferrer">KNTQ/USDT K线 ↗</a>
         <button class="pill rpc" id="rpcBadge" type="button">RPC —</button>
         <button class="btn small" id="refreshBtn" type="button">刷新</button>
+        <a class="btn small" href="/">返回首页</a>
         <button class="btn primary" id="connectBtn" type="button">连接钱包</button>
       </div>
     </div>
@@ -45,8 +46,9 @@
 
     <section class="pool-head">
       <div>
-        <h2>KNTQ / HYPE <span class="fee-badge">1%</span></h2>
-        <p>Elysium · Uniswap V4 · 1% · 价格按 USDT 折算</p>
+        <h2>KNTQ / HYPE <span class="fee-badge" id="poolFeeBadge">1%</span></h2>
+        <p id="poolSubtitle">Elysium · Uniswap V4 · 多池看板</p>
+        <label>行情 / 流动性池 <select id="poolSelect" class="select"><option value="10000">1%</option><option value="3000">0.3%</option></select></label>
       </div>
       <div class="pool-price">
         <div><span>价格</span><strong id="poolPrice">—</strong></div>
@@ -54,6 +56,8 @@
         <div><span>行情</span><strong id="marketAge">—</strong></div>
       </div>
     </section>
+
+    <section class="summary-strip" id="poolOverview" aria-live="polite"></section>
 
     <section class="summary-strip">
       <div><span>总本金</span><strong id="sumPrincipal">$—</strong><small id="sumPrincipalTokens">—</small></div>
@@ -93,7 +97,7 @@
       <div id="positionsGrid" class="positions-list" aria-live="polite"></div>
       <div id="positionsEmpty" class="empty-state">
         <h4>还没有 KNTQ/HYPE 仓位</h4>
-        <p>可以直接在下方添加流动性；预览会先模拟，不会自动发交易。</p>
+        <p>可分享配置没有预填钱包。请连接右上角钱包，或只在本地填写 ui.defaultAddress（不要提交到 git）。</p>
         <a class="btn small" id="emptyComposeBtn" href="#buildCard">去下方添加流动性</a>
         <button class="btn small" id="emptyBurnBtn" type="button" hidden>销毁空 NFT</button>
       </div>
@@ -101,9 +105,10 @@
 
 
     <section class="card build-card" id="buildCard">
-      <div class="card-head"><div><h3>添加流动性</h3><small>KNTQ/HYPE · Uniswap V4 · 1% · 自由输入任意一侧</small></div><span class="fee-badge">V4 · 1%</span></div>
+      <div class="card-head"><div><h3>添加流动性</h3><small id="composerSubtitle">KNTQ/HYPE · Uniswap V4 · 自由输入任意一侧</small></div><span class="fee-badge" id="composerFeeBadge">V4 · 1%</span></div>
       <div class="build-body" id="composer">
         <div class="build-form">
+          <label class="build-label">手续费池 <select id="composerPoolSelect" class="select"><option value="10000">1%</option><option value="3000">0.3%</option></select> <small>切换后按该池价格配比，仓位汇总仍包含两个池</small></label>
           <div class="build-wallet"><span>钱包 HYPE <b id="buildHypeBal">—</b></span><span>KNTQ <b id="buildKntqBal">—</b></span><span id="authState">授权：—</span><button id="reauthBtn" type="button" hidden>重新授权</button><span id="balanceAutoHint" class="balance-auto-hint">余额自动刷新</span></div>
           <div class="build-inputs">
             <label class="build-input"><span>HYPE</span><div><input id="hypeInput" inputmode="decimal" placeholder="0.0" autocomplete="off"><button id="maxHypeBtn" type="button">MAX</button></div></label>
@@ -152,7 +157,7 @@
       <div class="card-head"><div><h3>区间年化 & 成交量</h3><small>按当前池 24 小时成交估算 · 0 仓位也能参考</small></div><span class="fee-badge" id="statsUpdated">读取中…</span></div>
       <div class="stats-two-col">
         <div class="stats-block">
-          <div class="stats-block-head"><h4>同区间估算 APR</h4><span>$1,000 本金 · 1% fee</span></div>
+          <div class="stats-block-head"><h4>同区间估算 APR</h4><span id="statsFeeLabel">$1,000 本金 · 1% fee</span></div>
           <div class="range-apr-grid" id="rangeAprGrid"><div class="stats-loading">读取成交历史中…</div></div>
         </div>
         <div class="stats-block">
@@ -221,6 +226,6 @@
   <script src="vendor/ethers.umd.min.js"></script>
   <script src="math.js"></script>
   <script src="abi.js"></script>
-  <script src="app.js?v=20261110-2585"></script>
+  <script src="app.js?v=20261110-multipool-1"></script>
 </body>
 </html>

@@ -6,7 +6,12 @@ config.local.json
 *.pem
 *.key
 *.p12
+id_rsa
+id_ed25519
 *.log
+
+# filled Bark env; the *.example template stays tracked
+deploy/elysium-lp-report.env
 
 # Python
 __pycache__/
@@ -27,9 +32,15 @@ Thumbs.db
 # build / backups
 *.bak
 *.bak.*
+*.bak-*
 .tmp/
 logs/
+backups/
 
-# local claimed-fee journal
+# local claimed-fee journal, report caches, wallet snapshots
 .elysium-lp-claims.json
+.elysium-lp-entry-cache.json
+.elysium-lp-active-ids.json
+.elysium-lp-reference.json
+.elysium-lp-alerts.json
 data/claims.json

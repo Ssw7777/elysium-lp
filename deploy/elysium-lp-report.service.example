@@ -1,0 +1,11 @@
+[Unit]
+Description=Elysium LP pending-fee Bark report
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=YOUR_USER
+EnvironmentFile=/etc/elysium-lp-report.env
+ExecStart=/usr/bin/node /opt/elysium-lp/report.js
+
+# Copy this template, replace YOUR_USER and paths, and do not commit a real EnvironmentFile.

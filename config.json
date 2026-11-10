@@ -52,7 +52,33 @@
     },
     "fee": 10000,
     "tickSpacing": 200,
-    "deploymentBlock": 422319
+    "deploymentBlock": 422319,
+    "pools": [
+      {
+        "poolId": "0xc96bfd21d36f8e7252f0d80fcb5f3bcacdf47c8b927b20711104713ebeb383ac",
+        "poolKey": {
+          "currency0": "0x0000000000000000000000000000000000000000",
+          "currency1": "0xe45a355d9e9cad2ad85f2d03e3ee3102a036acf0",
+          "fee": 10000,
+          "tickSpacing": 200,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "fee": 10000,
+        "tickSpacing": 200
+      },
+      {
+        "poolId": "0xf9b8a9101438145d62c9f03156b203c6c573931167e2d36f9061a32575706c8a",
+        "poolKey": {
+          "currency0": "0x0000000000000000000000000000000000000000",
+          "currency1": "0xe45a355d9e9cad2ad85f2d03e3ee3102a036acf0",
+          "fee": 3000,
+          "tickSpacing": 60,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "fee": 3000,
+        "tickSpacing": 60
+      }
+    ]
   },
   "market": {
     "hypeUsdUrl": "https://api.hyperliquid.xyz/info",

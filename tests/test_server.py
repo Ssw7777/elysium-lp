@@ -17,6 +17,21 @@ class ElysiumConfigTests(unittest.TestCase):
         self.assertEqual(config["uniswap"]["poolId"][:10], "0xc96bfd21")
         self.assertEqual(config["uniswap"]["poolKey"]["currency0"], "0x0000000000000000000000000000000000000000")
         self.assertEqual(config["uniswap"]["fee"], 10000)
+        pools = {item["fee"]: item for item in config["uniswap"]["pools"]}
+        self.assertEqual(pools[10000]["poolId"], "0xc96bfd21d36f8e7252f0d80fcb5f3bcacdf47c8b927b20711104713ebeb383ac")
+        self.assertEqual(pools[10000]["tickSpacing"], 200)
+        self.assertEqual(pools[10000]["poolKey"]["hooks"], "0x0000000000000000000000000000000000000000")
+        self.assertEqual(pools[3000]["poolId"], "0xf9b8a9101438145d62c9f03156b203c6c573931167e2d36f9061a32575706c8a")
+        self.assertEqual(pools[3000]["tickSpacing"], 60)
+        self.assertEqual(pools[3000]["poolKey"]["fee"], 3000)
+        self.assertEqual(pools[3000]["poolKey"]["tickSpacing"], 60)
+        self.assertEqual(pools[3000]["poolKey"]["hooks"], "0x0000000000000000000000000000000000000000")
+        self.assertEqual(config["ui"]["defaultAddress"], "")
+        self.assertEqual(config["ui"]["hypeReference"], 0)
+        blob = json.dumps(config).lower()
+        self.assertNotIn("tokenid", blob)
+        self.assertNotIn("baseline", blob)
+        self.assertNotIn("nft", blob)
 
     def test_wrong_chain_rejected(self):
         config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
@@ -54,12 +69,40 @@ class PrefixHttpTests(unittest.TestCase):
             data = json.loads(r.read())
         self.assertEqual(data["network"]["chainId"], 99901)
         self.assertEqual(data["uniswap"]["poolId"][:10], "0xc96bfd21")
+        self.assertEqual(len(data["uniswap"]["pools"]), 2)
+        self.assertEqual(data["ui"]["defaultAddress"], "")
+        self.assertEqual(data["ui"]["hypeReference"], 0)
 
     def test_prefixed_index(self):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/elysium-lp/", timeout=5) as r:
             body = r.read().decode()
         self.assertIn("Elysium LP", body)
         self.assertIn('base href="/elysium-lp/"', body)
+        self.assertIn('id="poolSelect"', body)
+        self.assertIn('id="composerPoolSelect"', body)
+        self.assertIn("0.3%", body)
+        self.assertIn("ui.defaultAddress", body)
+
+    def test_fee_mismatch_rejected(self):
+        config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+        config["uniswap"]["pools"][1]["fee"] = 10000
+        with self.assertRaises(ValueError) as ctx:
+            server.validate_config(config)
+        self.assertIn("does not match poolKey", str(ctx.exception))
+
+    def test_placeholder_wallet_rejected(self):
+        config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+        config["ui"]["defaultAddress"] = "0xYOUR_WALLET_ADDRESS"
+        with self.assertRaises(ValueError) as ctx:
+            server.validate_config(config)
+        self.assertIn("defaultAddress", str(ctx.exception))
+
+    def test_negative_reference_rejected(self):
+        config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+        config["ui"]["hypeReference"] = -1
+        with self.assertRaises(ValueError) as ctx:
+            server.validate_config(config)
+        self.assertIn("hypeReference", str(ctx.exception))
 
     def test_traversal(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:

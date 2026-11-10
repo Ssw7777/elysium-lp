@@ -5,6 +5,7 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. Chain 
 ## Features
 
 - Reads real V4 pool state, positions, ticks and liquidity distribution from Elysium.
+- Two official KNTQ/HYPE Uniswap V4 pools: **1%** (`fee` 10000, `tickSpacing` 200, poolId `0xc96bfd21d36f8e7252f0d80fcb5f3bcacdf47c8b927b20711104713ebeb383ac`) and **0.3%** (`fee` 3000, `tickSpacing` 60, hooks `0`, poolId `0xf9b8a9101438145d62c9f03156b203c6c573931167e2d36f9061a32575706c8a`). Switch the fee tier for price, distribution and new liquidity. Totals always include both pools, and each NFT is priced with its own poolKey.
 - Entry value, current value, net PnL, impermanent loss (IL), pending fees and **claimed fees**.
 - Claimed fees stay in PnL until an optional empty-NFT burn; a normal full withdrawal does not clear them. The position card shows the cumulative claimed USD amount.
 - 5m / 30m / 1h APR, next-day estimated yield, a 20-second price/valuation refresh and a 60-second full position scan.
@@ -22,7 +23,7 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. Chain 
 
 The server never asks for a mnemonic or private key and never broadcasts a transaction. Only a confirmed claim/withdraw is signed in the browser wallet. There is no automatic slippage widening, transaction resend or private-key handling.
 
-`ui.defaultAddress` is empty by default, so the page starts in wallet-connect mode. Set a public address there only for a read-only mobile view.
+`ui.defaultAddress` is empty by default, so the page starts in wallet-connect mode and tells you to connect a wallet. Set a public address only in a local uncommitted config for a read-only view. `ui.hypeReference` stays `0` in git.
 
 ## Quick start
 
@@ -40,9 +41,9 @@ No third-party Python packages are required. The ethers.js browser bundle is ven
 Edit `config.json`:
 
 - `network.rpcUrls`: official Elysium RPC.
-- `uniswap.*`: public pool, PoolManager, StateView and PositionManager addresses.
-- `ui.defaultAddress`: leave empty to connect a wallet; set an address for read-only viewing.
-- `ui.hypeReference`: optional HYPE amount used only as a reference in the HYPE strip. Use `0` to hide it.
+- `uniswap.*` and `uniswap.pools`: public PoolManager, StateView, PositionManager and the two pool descriptors above. `uniswap.poolId` is the default 1% view.
+- `ui.defaultAddress`: keep `""` in git. Connect a wallet, or set a public address only in a local uncommitted config.
+- `ui.hypeReference`: keep `0` in git. It is an optional personal baseline, not something stored in the repository.
 - `ui.hyperEvmRpc`: HyperEVM RPC for the HYPE wallet balance.
 - `safety.*`: stale thresholds and display limits.
 
@@ -56,7 +57,7 @@ After a claim is confirmed, the frontend posts owner, token id, claimed HYPE/KNT
 ~/.elysium-lp-claims.json
 ```
 
-`GET /api/claims?owner=0x...` returns one owner's journal. A successful 100% withdrawal calls `POST /api/claim/clear`, which removes that token's entry only after the position is gone. Partial withdrawals keep it.
+`GET /api/claims?owner=0x...` returns one owner's journal. The journal entry is cleared only by the optional empty-NFT burn via `POST /api/claim/clear`. A normal 100% withdrawal keeps the entry so claimed fees remain in PnL.
 
 PnL is calculated as:
 
@@ -68,17 +69,19 @@ The journal contains no keys, but it is still private data. **Put the app behind
 
 ## Optional periodic Bark report
 
-`scripts/hourly_report.js` is an optional read-only Node.js job. The filename is kept for compatibility; run it at any interval, for example every five minutes:
+`report.js` is the optional read-only Node.js job. It covers both configured pools, prices each NFT from that NFT's own poolKey, retries transient RPC failures, and refuses to send Bark when a previously active position is neither confirmed closed nor fully read.
 
 ```bash
 export BARK_KEY="your-bark-key"
-export DEFAULT_ADDRESS="0x..."
-node scripts/hourly_report.js
+export DEFAULT_ADDRESS="0xYourPublicAddress"
+node report.js
 ```
+
+`scripts/hourly_report.js` only forwards to `report.js` once. Schedule one of them, not both. With no wallet configured, the job prints how to set `DEFAULT_ADDRESS` and exits before any RPC call or failure push.
 
 It sends pending fees, net PnL, claimed fees, range distance, HYPE total and timestamp. `isArchive: 1` keeps the message in Bark history. The script never signs transactions.
 
-A systemd timer such as `OnCalendar=*:0/5` gives a five-minute cadence. Keep `BARK_KEY` in a mode-`600` `EnvironmentFile`, not in the repository.
+Example units are in `deploy/`. This repository does not enable GitHub Actions or a timer. A local `OnCalendar=*:0/5` timer is a five-minute cadence. Keep `BARK_KEY` in a mode-`600` or `640` `EnvironmentFile`, not in the repository.
 
 ### Bark alerts
 
@@ -100,11 +103,19 @@ The 5-minute report also evaluates the **freshly read current positions**:
 
 ## Limitations
 
-- Single pool: KNTQ/HYPE. Other-pool dashboards are not included.
+- KNTQ/HYPE only, on the 1% and 0.3% pools above. Other pairs are not included.
 - Built-in add-liquidity panel; there is no automatic swap, rebalancing or transaction retry.
 - Entry value is approximate if liquidity was added after mint.
 - Claimed-fee history starts when this journal feature is deployed. Claims made directly in a wallet or before the feature are not reconstructed automatically.
 - HYPE/USD and KNTQ/USD are market estimates, not execution guarantees.
+
+## Secure self-hosting
+
+- Run `server.py` on `127.0.0.1` and put your own reverse proxy, with authentication, in front. Do not publish port 8097.
+- Do not commit wallets, Bark device keys, claim journals, alert state, HYPE baselines or NFT lists. Runtime files are gitignored. Examples live in `deploy/*.example`.
+- `deploy_vps.sh` installs the localhost web service only after `ELYSIUM_INSTALL=1`. It does not install the Bark timer.
+- This repository does not include a separate login app. Keep production proxy config and EnvironmentFiles off git.
+- Only public chain addresses and the two pool ids belong in `config.json`.
 
 ## License
 

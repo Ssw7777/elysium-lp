@@ -1,0 +1,16 @@
+[Unit]
+Description=Elysium LP (KNTQ/HYPE Uniswap V4)
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/opt/elysium-lp
+ExecStart=/usr/bin/python3 /opt/elysium-lp/server.py --no-open --host 127.0.0.1 --port 8097
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -19,7 +19,7 @@
 
   const ui = {};
   [
-    'appTitle', 'appSubtitle', 'networkBadge', 'rpcBadge', 'refreshBtn', 'connectBtn',
+    'poolSelect', 'composerPoolSelect', 'poolFeeBadge', 'poolSubtitle', 'composerSubtitle', 'composerFeeBadge', 'poolOverview', 'statsFeeLabel', 'appTitle', 'appSubtitle', 'networkBadge', 'rpcBadge', 'refreshBtn', 'connectBtn',
     'staleBanner', 'staleTitle', 'staleText', 'staleRefreshBtn', 'walletAddress', 'walletMenuBtn',
     'balanceHype', 'balanceKntq', 'kntqUsdBalance', 'marketPrice', 'marketAge', 'poolPrice',
     'sumPrincipal', 'sumPrincipalTokens', 'sumFees', 'sumFeesTokens', 'sumApr', 'sumPositions', 'sumEmpty',
@@ -58,7 +58,7 @@
     market: null,
     marketAt: 0,
     wallet: { address: null, chainId: null, provider: null, signer: null, connecting: false, readOnly: false },
-    pool: null,
+    pool: null, pools: {}, poolSwitching: false,
     balances: { hype: 0n, kntq: 0n }, balancesAt: 0, balancesRefreshing: false,
     hyperEvmHype: null,
     positions: [],
@@ -240,6 +240,7 @@ function fmtSignedUsd(v) {
   async function loadConfig() {
     const config = await fetchJson('api/config');
     state.config = config;
+    initPools();
     document.title = (config.ui.title || 'Elysium LP') + ' · KNTQ/HYPE';
     ui.appTitle.textContent = config.ui.title || 'Elysium LP';
     ui.appSubtitle.textContent = config.ui.subtitle || 'Elysium · Uniswap V4';
@@ -337,6 +338,7 @@ function fmtSignedUsd(v) {
     ui.marketAge.textContent = '行情 ' + fmtAge(marketAgeSec()) + (isMarketStale() ? ' · 过期' : '');
     const k = kntqUsd();
     if (k != null && ui.kntqUsdBalance) ui.kntqUsdBalance.textContent = '≈ ' + fmtUsd(k * Number(ethers.formatUnits(state.balances.kntq, 18)));
+    renderPoolOverview();
     if (state.pool && kntqUsd() != null) ui.poolPrice.textContent = 'KNTQ ' + fmtUsd(kntqUsd(), { digits: 4 });
   }
 
@@ -598,10 +600,77 @@ function fmtSignedUsd(v) {
     return { number: Number(BigInt(numberHex)), timestamp: Number(BigInt(block.timestamp)) };
   }
 
-  async function readPool() {
+  function poolDefinitions() { return state.config.uniswap.pools || [state.config.uniswap]; }
+  function keyArray(key) { return [key.currency0, key.currency1, Number(key.fee), Number(key.tickSpacing), key.hooks]; }
+  function poolIdForKey(key) {
+    return ethers.keccak256(coder.encode(['tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks)'], [keyArray(key)]));
+  }
+  function initPools() {
+    for (const def of poolDefinitions()) {
+      if (lower(poolIdForKey(def.poolKey)) !== lower(def.poolId) || Number(def.fee) !== Number(def.poolKey.fee) || Number(def.tickSpacing) !== Number(def.poolKey.tickSpacing)) throw new Error('池子参数校验失败');
+    }
+    const options = poolDefinitions().map((p) => '<option value="' + p.poolId + '">' + fmtNum(p.fee / 10000, 2) + '% 手续费</option>').join('');
+    for (const el of [ui.poolSelect, ui.composerPoolSelect]) if (el) el.innerHTML = options;
+    syncPoolUi();
+  }
+  function syncPoolUi() {
+    const u = state.config.uniswap;
+    const label = fmtNum(u.fee / 10000, 2) + '%';
+    for (const el of [ui.poolSelect, ui.composerPoolSelect]) if (el) el.value = u.poolId;
+    if (ui.poolFeeBadge) ui.poolFeeBadge.textContent = label;
+    if (ui.composerFeeBadge) ui.composerFeeBadge.textContent = 'V4 · ' + label;
+    if (ui.poolSubtitle) ui.poolSubtitle.textContent = 'Elysium · Uniswap V4 · ' + label + ' · 仓位及资产汇总始终包含两个池';
+    if (ui.composerSubtitle) ui.composerSubtitle.textContent = 'KNTQ/HYPE · Uniswap V4 · ' + label + ' · 自由输入任意一侧';
+    if (ui.statsFeeLabel) ui.statsFeeLabel.textContent = '$1,000 本金 · ' + label + ' fee';
+  }
+  function renderPoolOverview() {
+    if (!ui.poolOverview) return;
+    const h = state.market?.price || 0;
+    ui.poolOverview.innerHTML = poolDefinitions().map((def) => {
+      const p = state.pools[lower(def.poolId)];
+      return '<div><span>KNTQ/HYPE · ' + fmtNum(def.fee / 10000, 2) + '%</span><strong>' + (p && h ? fmtUsd(h / p.rawPrice, {digits: 4}) : '—') + '</strong><small>' + (p ? '活跃流动性 L: ' + p.liquidity.toString() + ' · tick ' + p.tick : '读取中…') + '</small></div>';
+    }).join('');
+  }
+  async function selectPool(poolId) {
+    if (!state.config) return;
+    if (lower(poolId) === lower(state.config.uniswap.poolId)) return;
+    if (state.refreshing || state.poolSwitching || state.stats.loading || state.chart.loading || state.distribution.loading || state.fastRefreshing || !ui.modalBackdrop.hidden) {
+      syncPoolUi(); toast('请稍候', '数据读取或预览中，完成后再切换池子。'); return;
+    }
+    const def = poolDefinitions().find((p) => lower(p.poolId) === lower(poolId));
+    if (!def) return;
+    state.poolSwitching = true;
+    for (const el of [ui.poolSelect, ui.composerPoolSelect]) if (el) el.disabled = true;
+    try {
+      const pool = await readPool(def);
+      Object.assign(state.config.uniswap, {poolId: def.poolId, poolKey: def.poolKey, fee: def.fee, tickSpacing: def.tickSpacing});
+      state.pool = pool;
+      state.pools[lower(def.poolId)] = pool;
+      state.compose.seq += 1; state.compose.quote = null;
+      state.compose.customLowerTick = null; state.compose.customUpperTick = null;
+      state.compose.sliderMinTick = null; state.compose.sliderMaxTick = null;
+      state.chart.seq += 1; state.chart.cache = {}; state.chart.candles = []; state.chart.stats = null;
+      state.stats.at = 0; state.stats.data = null; state.distribution.at = 0;
+      syncPoolUi(); updateMarketUi(); updateComposeUi(); scheduleQuote(true);
+      await refreshAll();
+    } catch (error) { toast('切换池子失败', decodeErr(error), 'error'); }
+    finally { state.poolSwitching = false; syncPoolUi(); for (const el of [ui.poolSelect, ui.composerPoolSelect]) if (el) el.disabled = false; }
+  }
+  async function readAllPools() {
+    const rows = await Promise.all(poolDefinitions().map((def) => readPool(def)));
+    state.pools = Object.fromEntries(rows.map((p) => [lower(p.poolId), p]));
+    state.pool = state.pools[lower(state.config.uniswap.poolId)];
+    renderPoolOverview();
+    return state.pool;
+  }
+  function positionPool(p) { return state.pools[lower(p.poolId)] || p.pool; }
+  function positionKntqUsd(p) { const pool = positionPool(p); return pool && state.market?.price > 0 ? state.market.price / pool.rawPrice : null; }
+
+  async function readPool(definition) {
     const cfg = state.config;
     const stateView = getAddress(cfg.uniswap.stateView);
-    const poolId = cfg.uniswap.poolId;
+    const def = definition || cfg.uniswap;
+    const poolId = def.poolId;
     const calls = [
       { to: stateView, data: callData(iface.state, 'getSlot0', [poolId]) },
       { to: stateView, data: callData(iface.state, 'getLiquidity', [poolId]) },
@@ -612,7 +681,7 @@ function fmtSignedUsd(v) {
     const liquidity = decodeCall(iface.state, 'getLiquidity', res[1])[0];
     const manager = getAddress(decodeCall(iface.state, 'poolManager', res[2])[0]);
     if (lower(manager) !== lower(cfg.uniswap.poolManager)) throw new Error('StateView 的 PoolManager 与配置不一致');
-    if (Number(slot0[3]) !== Number(cfg.uniswap.fee)) throw new Error('池子 LP fee 与配置不一致');
+    if (Number(slot0[3]) !== Number(def.fee)) throw new Error('池子 LP fee 与配置不一致');
     const sqrtPriceX96 = BigInt(slot0[0]);
     const tick = Number(slot0[1]);
     const rawPrice = M.priceFromSqrtX96(sqrtPriceX96);
@@ -624,7 +693,7 @@ function fmtSignedUsd(v) {
       liquidity: BigInt(liquidity),
       rawPrice,
       price: 1 / rawPrice,
-      tickSpacing: Number(cfg.uniswap.tickSpacing),
+      tickSpacing: Number(def.tickSpacing),
       poolManager: manager
     };
   }
@@ -849,47 +918,54 @@ function fmtSignedUsd(v) {
     const infos = await batchCalls(currentIds.map((id) => ({ to: pm, data: callData(iface.pm, 'getPoolAndPositionInfo', [id]) })));
     const liqs = await batchCalls(currentIds.map((id) => ({ to: pm, data: callData(iface.pm, 'getPositionLiquidity', [id]) })));
     if (infos.some((row) => row.error) || liqs.some((row) => row.error)) throw new Error('仓位详情读取失败，已保留旧仓位');
-    const poolHigh = BigInt(cfg.uniswap.poolId) >> 56n;
+    const allowedPools = new Set(poolDefinitions().map((p) => lower(p.poolId)));
     const base = [];
     for (let i = 0; i < currentIds.length; i += 1) {
       if (infos[i].error || liqs[i].error) continue;
       let decoded;
       try { decoded = iface.pm.decodeFunctionResult('getPoolAndPositionInfo', infos[i].result); } catch (_) { continue; }
       const info = BigInt(decoded[1]);
-      if ((info >> 56n) !== poolHigh) continue;
+      const key = decoded[0];
+      const poolKey = {currency0: key[0], currency1: key[1], fee: Number(key[2]), tickSpacing: Number(key[3]), hooks: key[4]};
+      const poolId = poolIdForKey(poolKey);
+      if (!allowedPools.has(lower(poolId))) continue;
+      if ((info >> 56n) !== (BigInt(poolId) >> 56n)) throw new Error('仓位 poolKey 校验失败');
+      const pool = state.pools[lower(poolId)];
+      if (!pool) throw new Error('仓位所属池尚未读取');
       const tokenId = currentIds[i];
       const tickLower = int24((info >> 8n) & 0xffffffn);
       const tickUpper = int24((info >> 32n) & 0xffffffn);
       let liquidity;
       try { liquidity = iface.pm.decodeFunctionResult('getPositionLiquidity', liqs[i].result)[0]; } catch (_) { continue; }
-      base.push({ tokenId, tickLower, tickUpper, liquidity, mintBlock: mintBlocks.get(tokenId.toString()) || null, positionKey: positionKey(tokenId, tickLower, tickUpper) });
+      base.push({ tokenId, poolId, poolKey, pool, tickLower, tickUpper, liquidity, mintBlock: mintBlocks.get(tokenId.toString()) || null, positionKey: positionKey(tokenId, tickLower, tickUpper) });
     }
     if (!base.length) return { positions: [], hidden: 0 };
     const feeCalls = [];
     for (const p of base) {
-      feeCalls.push({ to: getAddress(cfg.uniswap.stateView), data: callData(iface.state, 'getPositionInfo', [cfg.uniswap.poolId, p.positionKey]) });
-      feeCalls.push({ to: getAddress(cfg.uniswap.stateView), data: callData(iface.state, 'getFeeGrowthInside', [cfg.uniswap.poolId, p.tickLower, p.tickUpper]) });
+      feeCalls.push({ to: getAddress(cfg.uniswap.stateView), data: callData(iface.state, 'getPositionInfo', [p.poolId, p.positionKey]) });
+      feeCalls.push({ to: getAddress(cfg.uniswap.stateView), data: callData(iface.state, 'getFeeGrowthInside', [p.poolId, p.tickLower, p.tickUpper]) });
     }
     const feeRes = await batchCalls(feeCalls);
     const hypeUsd = state.market?.price || 0;
-    const kUsd = state.pool && hypeUsd ? hypeUsd / state.pool.rawPrice : null;
     const positions = [];
     let hidden = 0;
     for (let i = 0; i < base.length; i += 1) {
       const p = base[i];
+      const pool = positionPool(p);
+      const kUsd = hypeUsd ? hypeUsd / pool.rawPrice : null;
       const posInfo = feeRes[i * 2];
       const growth = feeRes[i * 2 + 1];
-      if (posInfo.error || growth.error) continue;
+      if (posInfo.error || growth.error) throw new Error('手续费读取不完整，已保留旧仓位');
       let pi, fg;
       try {
         pi = iface.state.decodeFunctionResult('getPositionInfo', posInfo.result);
         fg = iface.state.decodeFunctionResult('getFeeGrowthInside', growth.result);
-      } catch (_) { continue; }
+      } catch (_) { throw new Error('手续费解析失败，已保留旧仓位'); }
       const fees0 = feeFromGrowth(p.liquidity, fg[0], pi[1]);
       const fees1 = feeFromGrowth(p.liquidity, fg[1], pi[2]);
       const sqrtLower = M.tickToSqrtRatioX96(p.tickLower);
       const sqrtUpper = M.tickToSqrtRatioX96(p.tickUpper);
-      const amounts = M.amountsForLiquidity(p.liquidity, sqrtLower, sqrtUpper, state.pool.sqrtPriceX96);
+      const amounts = M.amountsForLiquidity(p.liquidity, sqrtLower, sqrtUpper, pool.sqrtPriceX96);
       const principalUsd = kUsd == null ? null : Number(ethers.formatUnits(amounts.amount0, 18)) * hypeUsd + Number(ethers.formatUnits(amounts.amount1, 18)) * kUsd;
       const feesUsd = kUsd == null ? null : Number(ethers.formatUnits(fees0, 18)) * hypeUsd + Number(ethers.formatUnits(fees1, 18)) * kUsd;
       const closed = p.liquidity === 0n && fees0 === 0n && fees1 === 0n;
@@ -899,7 +975,7 @@ function fmtSignedUsd(v) {
       positions.push(Object.assign({}, p, {
         sqrtLower, sqrtUpper, amount0: amounts.amount0, amount1: amounts.amount1,
         fees0, fees1, feeGrowthLast0: pi[1], feeGrowthLast1: pi[2], principalUsd, feesUsd, closed,
-        inRange: state.pool.tick >= p.tickLower && state.pool.tick < p.tickUpper,
+        inRange: pool.tick >= p.tickLower && pool.tick < p.tickUpper,
         rangeLower: 1 / M.priceFromSqrtX96(sqrtUpper),
         rangeUpper: 1 / M.priceFromSqrtX96(sqrtLower),
         firstSeen: state.firstSeen[firstKey]
@@ -910,10 +986,11 @@ function fmtSignedUsd(v) {
 
   async function attachPnl(positions, block) {
     const currentHype = state.market?.price;
-    const currentK = kntqUsd();
-    if (!(currentHype > 0) || !(currentK > 0)) return;
+    if (!(currentHype > 0)) return;
     const stateView = getAddress(state.config.uniswap.stateView);
     for (const p of positions) {
+      const currentK = positionKntqUsd(p);
+      if (!(currentK > 0)) continue;
       const claim = state.claims[String(p.tokenId)] || {};
       p.claimedUsd = Number(claim.usd || 0);
       p.claimedCount = Number(claim.count || 0);
@@ -928,7 +1005,7 @@ function fmtSignedUsd(v) {
           const [header, res] = await Promise.all([
             rpcRaw('eth_getBlockByNumber', [tag, false]),
             batchCalls([
-              { to: stateView, block: tag, data: callData(iface.state, 'getSlot0', [state.config.uniswap.poolId]) },
+              { to: stateView, block: tag, data: callData(iface.state, 'getSlot0', [p.poolId]) },
               { to: getAddress(state.config.uniswap.positionManager), block: tag, data: callData(iface.pm, 'getPositionLiquidity', [p.tokenId]) }
             ])
           ]);
@@ -972,9 +1049,9 @@ function fmtSignedUsd(v) {
     }
   }
 
-  function usdFees(f0, f1) {
+  function usdFees(f0, f1, position) {
     const h = state.market?.price;
-    const k = kntqUsd();
+    const k = position ? positionKntqUsd(position) : kntqUsd();
     if (!(h > 0) || k == null) return null;
     return Number(ethers.formatUnits(f0, 18)) * h + Number(ethers.formatUnits(f1, 18)) * k;
   }
@@ -1026,7 +1103,7 @@ function fmtSignedUsd(v) {
     const calls = [];
     for (const p of positions) {
       for (const tag of tags) {
-        calls.push({ to: stateView, block: tag, data: callData(iface.state, 'getFeeGrowthInside', [state.config.uniswap.poolId, p.tickLower, p.tickUpper]) });
+        calls.push({ to: stateView, block: tag, data: callData(iface.state, 'getFeeGrowthInside', [p.poolId, p.tickLower, p.tickUpper]) });
       }
     }
     let results = [];
@@ -1034,7 +1111,7 @@ function fmtSignedUsd(v) {
 
     for (let pi = 0; pi < positions.length; pi += 1) {
       const p = positions[pi];
-      const currentUsd = usdFees(p.fees0, p.fees1);
+      const currentUsd = usdFees(p.fees0, p.fees1, p);
       const perWindow = {};
       for (let wi = 0; wi < windows.length; wi += 1) {
         const row = results[pi * windows.length + wi];
@@ -1045,7 +1122,7 @@ function fmtSignedUsd(v) {
         const past0 = feeFromGrowth(p.liquidity, fg[0], p.feeGrowthLast0);
         const past1 = feeFromGrowth(p.liquidity, fg[1], p.feeGrowthLast1);
         const elapsed = block.timestamp - Number(BigInt(header.timestamp));
-        const pastUsd = usdFees(past0, past1);
+        const pastUsd = usdFees(past0, past1, p);
         if (currentUsd == null || pastUsd == null || elapsed < 45 || currentUsd < pastUsd) { perWindow[windows[wi].key] = null; continue; }
         const apr = M.annualizedPercent(currentUsd, pastUsd, p.principalUsd, elapsed);
         const perSecond = M.perSecondUsd(currentUsd, pastUsd, elapsed);
@@ -1071,7 +1148,7 @@ function fmtSignedUsd(v) {
         if (points.length >= 2) {
           const first = points[0];
           const elapsed = (Date.now() - first.t) / 1000;
-          const baseUsd = usdFees(BigInt(first.f0), BigInt(first.f1));
+          const baseUsd = usdFees(BigInt(first.f0), BigInt(first.f1), p);
           if (elapsed >= 55 && currentUsd != null && baseUsd != null && currentUsd >= baseUsd) {
             p.apr = M.annualizedPercent(currentUsd, baseUsd, p.principalUsd, elapsed);
             p.perSecond = M.perSecondUsd(currentUsd, baseUsd, elapsed);
@@ -1091,9 +1168,14 @@ function fmtSignedUsd(v) {
 
   function repricePositions() {
     const h = state.market?.price;
-    const k = kntqUsd();
-    if (!(h > 0) || !(k > 0)) return;
+    if (!(h > 0)) return;
     for (const p of state.positions) {
+      const pool = positionPool(p);
+      const k = positionKntqUsd(p);
+      if (!pool || !(k > 0)) continue;
+      const amounts = M.amountsForLiquidity(p.liquidity, p.sqrtLower, p.sqrtUpper, pool.sqrtPriceX96);
+      p.amount0 = amounts.amount0; p.amount1 = amounts.amount1;
+      p.inRange = pool.tick >= p.tickLower && pool.tick < p.tickUpper;
       const hAmt = Number(ethers.formatUnits(p.amount0 || 0n, 18));
       const kAmt = Number(ethers.formatUnits(p.amount1 || 0n, 18));
       p.principalUsd = hAmt * h + kAmt * k;
@@ -1109,10 +1191,10 @@ function fmtSignedUsd(v) {
   }
 
   async function fastPriceRefresh() {
-    if (document.hidden || state.refreshing || !state.config || !state.pool) return;
+    if (document.hidden || state.refreshing || state.poolSwitching || state.fastRefreshing || !state.config || !state.pool) return;
+    state.fastRefreshing = true;
     try {
-      const pool = await readPool();
-      state.pool = pool;
+      const pool = await readAllPools();
       await loadMarket();
       repricePositions();
       updateMarketUi();
@@ -1120,7 +1202,7 @@ function fmtSignedUsd(v) {
       updateSummary();
       updateHypeUi();
       if (state.compose.preset === 'custom') { try { updateRangeUi(selectedRange()); } catch (_) { /* noop */ } }
-    } catch (_) { /* next interval */ }
+    } catch (_) { /* next interval */ } finally { state.fastRefreshing = false; }
   }
 
   async function refreshAll() {
@@ -1131,8 +1213,7 @@ function fmtSignedUsd(v) {
     try {
       const block = await readBlock();
       state.block = block;
-      const pool = await readPool();
-      state.pool = pool;
+      const pool = await readAllPools();
       let balances = { hype: 0n, kntq: 0n };
       let positions = [];
       let hidden = 0;
@@ -1492,7 +1573,7 @@ function fmtSignedUsd(v) {
         amount0Max, amount1Max, liquidity, range,
         slip, slipPct, totalUsd,
         deadline: nowSec() + 600,
-        createdAt: Date.now(), price: state.pool.price, rawPrice: state.pool.rawPrice,
+        poolId: state.pool.poolId, poolKey: Object.assign({}, state.config.uniswap.poolKey), createdAt: Date.now(), price: state.pool.price, rawPrice: state.pool.rawPrice,
         fee: state.pool.lpFee
       };
       state.compose.error = null;
@@ -1539,7 +1620,7 @@ function fmtSignedUsd(v) {
       ui.quoteKntq.textContent = fmtToken(q.amount1, 18, 5);
       ui.quoteRatio.textContent = amountRatioText(q.amount0, q.amount1);
       ui.quoteRange.textContent = q.range.full ? '全范围' : (fmtPrice(q.range.lowerPrice) + ' – ' + fmtPrice(q.range.upperPrice));
-      ui.quoteFee.textContent = fmtBps(q.fee);
+      ui.quoteFee.textContent = fmtNum(q.fee / 10000, 2) + '%';
       ui.quoteSlip.textContent = fmtNum(q.slipPct, 2) + '%';
       ui.quoteMin.textContent = 'HYPE ≤ ' + fmtToken(q.amount0Max, 18, 6) + ' · KNTQ ≤ ' + fmtToken(q.amount1Max, 18, 5);
       ui.quoteNote.textContent = '按当前价格和区间自动配比；签名前会重新模拟。KNTQ 不足不会自动兑换。';
@@ -1548,16 +1629,16 @@ function fmtSignedUsd(v) {
     } else {
       ui.quoteState.textContent = state.compose.quoting ? '计算中' : (error ? '需调整' : '等待输入');
       ui.quoteBudget.textContent = '—'; ui.quoteHype.textContent = '—'; ui.quoteKntq.textContent = '—';
-      ui.quoteRatio.textContent = '—'; ui.quoteRange.textContent = '—'; ui.quoteFee.textContent = '1.00%'; ui.quoteSlip.textContent = fmtNum(parseFloatSafe(ui.slippageInput.value) || 0, 2) + '%'; ui.quoteMin.textContent = '—';
+      ui.quoteRatio.textContent = '—'; ui.quoteRange.textContent = '—'; ui.quoteFee.textContent = fmtNum(state.config.uniswap.fee / 10000, 2) + '%'; ui.quoteSlip.textContent = fmtNum(parseFloatSafe(ui.slippageInput.value) || 0, 2) + '%'; ui.quoteMin.textContent = '—';
       if (!error) ui.quoteNote.textContent = '输入任意一侧数量，另一侧按当前区间比例自动计算。';
       if (!state.compose.hype && !state.compose.kntq) { ui.amountUsd.textContent = '≈ $—'; ui.amountRatio.textContent = '—'; }
     }
     updateComposerButtons();
   }
 
-  function sparkline(points) {
+  function sparkline(points, position) {
     if (!points || points.length < 2) return '<svg class="sparkline" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><path class="line" d="M0 20 L100 20" opacity="0.35"></path></svg>';
-    const vals = points.map((p) => usdFees(BigInt(p.f0 || '0'), BigInt(p.f1 || '0')) || 0);
+    const vals = points.map((p) => usdFees(BigInt(p.f0 || '0'), BigInt(p.f1 || '0'), position) || 0);
     const mn = Math.min(...vals); const mx = Math.max(...vals); const span = mx - mn || 1;
     const path = vals.map((v, i) => (i ? 'L' : 'M') + ((i / (vals.length - 1)) * 100).toFixed(2) + ' ' + (25 - ((v - mn) / span) * 20).toFixed(2)).join(' ');
     return '<svg class="sparkline" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><path class="line" d="' + path + '"></path></svg>';
@@ -1565,11 +1646,11 @@ function fmtSignedUsd(v) {
 
   function positionCard(p) {
     const statusClass = p.closed ? 'gray' : p.inRange ? 'green' : 'amber';
-    const status = p.closed ? '已撤空仓' : p.inRange ? '在区间' : (state.pool.tick < p.tickLower ? '低于区间' : '高于区间');
+    const status = p.closed ? '已撤空仓' : p.inRange ? '在区间' : (positionPool(p).tick < p.tickLower ? '低于区间' : '高于区间');
     const perSec = p.perSecond;
     const perDay = perSec == null ? null : perSec * 86400;
     const stale = txBlocked();
-    const k = kntqUsd();
+    const k = positionKntqUsd(p);
     const rangeLower = Number.isFinite(p.rangeLower) ? p.rangeLower : 0;
     const rangeUpper = Number.isFinite(p.rangeUpper) ? p.rangeUpper : 0;
     const windowText = (key, seconds) => {
@@ -1586,10 +1667,10 @@ function fmtSignedUsd(v) {
     const nearRange = p.inRange && distDown != null && distUp != null && Math.min(distDown, distUp) < 3;
     const rangeClass = p.closed ? 'empty' : p.inRange ? (nearRange ? 'near-range' : 'in-range') : 'out-of-range';
     const statusClass2 = p.closed ? 'gray' : p.inRange ? (nearRange ? 'amber' : 'green') : 'amber';
-    const status2 = p.closed ? '已撤空仓' : p.inRange ? (nearRange ? '接近边界' : '在区间') : (state.pool.tick < p.tickLower ? '低于区间' : '高于区间');
+    const status2 = p.closed ? '已撤空仓' : p.inRange ? (nearRange ? '接近边界' : '在区间') : (positionPool(p).tick < p.tickLower ? '低于区间' : '高于区间');
     return '' +
       '<article class="position-card ' + rangeClass + '" data-token-id="' + p.tokenId + '">' +
-        '<div class="pos-head"><div class="pos-id"><strong>#' + p.tokenId + '</strong><span class="pair">KNTQ / HYPE</span></div><span class="badge ' + statusClass2 + '">' + status2 + '</span></div>' +
+        '<div class="pos-head"><div class="pos-id"><strong>#' + p.tokenId + '</strong><span class="pair">KNTQ / HYPE · ' + fmtNum(p.poolKey.fee / 10000, 2) + '%</span></div><span class="badge ' + statusClass2 + '">' + status2 + '</span></div>' +
         '<div class="pos-pnl">' +
           '<span>投入 ' + (p.entryValueUsd == null ? '—' : (p.entry?.estimated ? '≈' : '') + fmtUsd(p.entryValueUsd)) + '</span>' +
           '<span>当前总价值 ' + (p.currentValueUsd == null ? '—' : fmtUsd(p.currentValueUsd, { digits: 2 })) + '</span>' +
@@ -1621,7 +1702,7 @@ function fmtSignedUsd(v) {
           '<div class="metric"><div class="metric-label"><span>预估年化</span><span>' + (p.aprWindow || '估算中') + '</span></div>' +
             '<strong class="metric-value ' + (p.apr > 0 ? 'positive' : 'muted') + '">' + (p.apr == null ? '—' : fmtPct(p.apr)) + '</strong>' +
             '<div class="rate-line"><b>' + (p.dayYield == null ? '+$—' : '+ ' + fmtUsd(p.dayYield, { digits: 2 })) + ' / 天</b><span>' + (perSec == null ? '' : '≈ ' + fmtTinyUsd(perSec) + ' / 秒') + '</span></div>' +
-            '<div class="metric-foot"><span>5m ' + windowText('5m', 300) + ' · 30m ' + windowText('30m', 1800) + ' · 1h ' + windowText('1h', 3600) + '</span></div>' + sparkline(p.aprPoints) +
+            '<div class="metric-foot"><span>5m ' + windowText('5m', 300) + ' · 30m ' + windowText('30m', 1800) + ' · 1h ' + windowText('1h', 3600) + '</span></div>' + sparkline(p.aprPoints, p) +
           '</div>' +
         '</div>' +
         (stale ? '<div class="card-stale">数据过期，正在自动重试；交易暂时锁定。</div>' : '') +
@@ -1633,7 +1714,7 @@ function fmtSignedUsd(v) {
                 ((!p.closed && p.liquidity > 0n) ? '<button class="btn small primary" data-action="withdraw" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>撤池</button>' : '') +
                 (p.closed ? '<button class="btn small" data-action="burn" data-token-id="' + p.tokenId + '" ' + (stale ? 'disabled' : '') + '>销毁空 NFT</button>' : '')) +
           '</div>' +
-          '<div class="pos-detail"><span>NFT #' + p.tokenId + (p.entryAgeSec == null ? '' : ' · 持仓 ' + M.formatDuration(p.entryAgeSec)) + '</span><b>2.00%</b></div>' +
+          '<div class="pos-detail"><span>NFT #' + p.tokenId + (p.entryAgeSec == null ? '' : ' · 持仓 ' + M.formatDuration(p.entryAgeSec)) + '</span><b>' + fmtNum(p.poolKey.fee / 10000, 2) + '%</b></div>' +
         '</div>' +
       '</article>';
   }
@@ -1670,7 +1751,7 @@ function fmtSignedUsd(v) {
       } else {
         if (ui.emptyBurnBtn) ui.emptyBurnBtn.hidden = true;
         ui.positionsEmpty.querySelector('h4').textContent = '还没有 KNTQ/HYPE 仓位';
-        ui.positionsEmpty.querySelector('p').textContent = state.wallet.address ? '右侧输入 HYPE 和 KNTQ 数量，先预览再创建仓位。' : '连接钱包后，这里会显示真实 V4 NFT 仓位、可领取手续费与近期实测年化。';
+        ui.positionsEmpty.querySelector('p').textContent = state.wallet.address ? '右侧输入 HYPE 和 KNTQ 数量，先预览再创建仓位。' : '可分享配置没有预填钱包。请点右上角「连接钱包」，或只在本地 config.json 填写 ui.defaultAddress（不要提交到 git）。';
       }
       return;
     }
@@ -1678,12 +1759,12 @@ function fmtSignedUsd(v) {
     if (ui.emptyBurnBtn) ui.emptyBurnBtn.hidden = true;
     const groups = new Map();
     for (const p of visible.filter((x) => !x.closed)) {
-      const key = p.tickLower + ':' + p.tickUpper;
+      const key = p.poolId + ':' + p.tickLower + ':' + p.tickUpper;
       groups.set(key, (groups.get(key) || 0) + 1);
     }
     const dup = Array.from(groups.entries()).find(([, n]) => n > 1);
     if (dup) {
-      const sample = visible.find((x) => x.tickLower + ':' + x.tickUpper === dup[0]);
+      const sample = visible.find((x) => x.poolId + ':' + x.tickLower + ':' + x.tickUpper === dup[0]);
       ui.rangeNotice.hidden = false;
       ui.rangeNotice.textContent = '检测到 ' + dup[1] + ' 个仓位使用同一区间（' + (state.market?.price ? fmtUsd(sample.rangeLower * state.market.price, { digits: 4 }) + ' – ' + fmtUsd(sample.rangeUpper * state.market.price, { digits: 4 }) + ' USDT' : '') + '）。同区间同流动性效率，年化会接近。';
     } else { ui.rangeNotice.hidden = true; }
@@ -1817,7 +1898,7 @@ function fmtSignedUsd(v) {
     if (ui.volumeStats) {
       ui.volumeStats.innerHTML = STATS_WINDOWS.map((w) => {
         const b = data.windows[w.key] || { volume: 0, count: 0 };
-        return '<div class="vol-card"><span>' + w.label + '</span><b>' + fmtUsdCompact(b.volume) + '</b><small>' + fmtUsd(b.volume * 0.01, { digits: 2 }) + ' fee · ' + b.count + ' 笔</small></div>';
+        return '<div class="vol-card"><span>' + w.label + '</span><b>' + fmtUsdCompact(b.volume) + '</b><small>' + fmtUsd(b.volume * (state.pool.lpFee / 1000000), { digits: 2 }) + ' fee · ' + b.count + ' 笔</small></div>';
       }).join('');
     }
     if (ui.statsNote) {
@@ -1860,7 +1941,7 @@ function fmtSignedUsd(v) {
         const posL = unitUsd > 0 ? 1e18 * 1000 / unitUsd : 0;
         const share = posL / Math.max(posL + Number(poolLiquidity), 1);
         const annualFactor = 24 / hours;
-        const dailyFee = inVol * 0.01 * share * annualFactor;
+        const dailyFee = inVol * (state.pool.lpFee / 1000000) * share * annualFactor;
         const apr = 1000 > 0 ? dailyFee / 1000 * 365 * 100 : 0;
         return { pct, lower: 1 / M.priceFromSqrtX96(sqrtU), upper: 1 / M.priceFromSqrtX96(sqrtL), inVol, dailyFee, apr };
       });
@@ -2165,7 +2246,7 @@ function fmtSignedUsd(v) {
 
   function buildMintData(quote) {
     const cfg = state.config;
-    const key = [cfg.uniswap.poolKey.currency0, cfg.uniswap.poolKey.currency1, cfg.uniswap.poolKey.fee, cfg.uniswap.poolKey.tickSpacing, cfg.uniswap.poolKey.hooks];
+    const key = keyArray(quote.poolKey);
     const mintParams = coder.encode(
       ['tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks)', 'int24', 'int24', 'uint256', 'uint128', 'uint128', 'address', 'bytes'],
       [key, quote.range.lowerTick, quote.range.upperTick, quote.liquidity, quote.amount0Max, quote.amount1Max, state.wallet.address, '0x']
@@ -2327,7 +2408,7 @@ function fmtSignedUsd(v) {
       '<div class="preview-item"><span>原生 HYPE 入池</span><strong>' + fmtToken(q.amount0, 18, 6) + '</strong></div>' +
       '<div class="preview-item"><span>KNTQ 入池</span><strong>' + fmtToken(q.amount1, 18, 5) + '</strong></div>' +
       '<div class="preview-item"><span>数量上限（滑点）</span><strong>' + fmtToken(q.amount0Max, 18, 6) + ' HYPE / ' + fmtToken(q.amount1Max, 18, 5) + ' KNTQ</strong></div>' +
-      '<div class="preview-item"><span>LP fee</span><strong class="gain">1.00%</strong></div>' +
+      '<div class="preview-item"><span>LP fee</span><strong class="gain">' + fmtNum(q.fee / 10000, 2) + '%</strong></div>' +
     '</div>' +
     '<div class="warning-box">V4 使用原生 HYPE；多余 HYPE 会通过 SWEEP 退回。KNTQ 通过 Permit2 结算，授权仅限本次上限。每笔交易在钱包弹窗前都会重新模拟。</div>' +
     '<div class="preview-section"><h4>执行步骤</h4><div class="preview-list">' + steps.map(planStepHtml).join('') + '</div></div>' +
@@ -2346,6 +2427,7 @@ function fmtSignedUsd(v) {
   async function executeBuildPlan(plan) {
     const q = plan.quote;
     if (Date.now() - plan.createdAt > Number(state.config.safety.txPlanTtlSeconds || 90) * 1000) throw new Error('预览已过期，请重新预览');
+    if (lower(q.poolId) !== lower(state.config.uniswap.poolId)) throw new Error('池子已切换，请重新预览');
     const latestPool = await readPool();
     const moved = Math.abs(latestPool.rawPrice / q.rawPrice - 1) * 10000;
     if (moved > q.slip) throw new Error('池价已移动 ' + fmtBps(moved) + '，超过你的滑点 ' + fmtNum(q.slipPct, 2) + '%；请重新预览');
@@ -2390,7 +2472,7 @@ function fmtSignedUsd(v) {
 
   function withdrawalAmounts(position, percent, slip) {
     const liquidity = percent >= 100 ? position.liquidity : position.liquidity * BigInt(percent) / 100n;
-    const a = M.amountsForLiquidity(liquidity, position.sqrtLower, position.sqrtUpper, state.pool.sqrtPriceX96);
+    const a = M.amountsForLiquidity(liquidity, position.sqrtLower, position.sqrtUpper, positionPool(position).sqrtPriceX96);
     return { liquidity, amount0: a.amount0, amount1: a.amount1, min0: a.amount0 * BigInt(10000 - slip) / 10000n, min1: a.amount1 * BigInt(10000 - slip) / 10000n };
   }
 
@@ -2540,6 +2622,7 @@ function fmtSignedUsd(v) {
         openModal({ eyebrow: 'WALLET', title: '断开钱包连接？', body: '<div class="warning-box">只会清除本页面连接状态，不会撤销钱包授权或影响链上资产。</div>', confirmText: '断开', onConfirm: async () => { disconnectWallet(); closeModal(true); } });
       });
     }
+    for (const el of [ui.poolSelect, ui.composerPoolSelect]) if (el) el.addEventListener('change', () => selectPool(el.value));
     ui.rpcBadge.addEventListener('click', openStatusModal);
     ui.refreshBtn.addEventListener('click', async () => { state.forceLogs = true; await poll(); toast('已刷新', '链上快照与行情已更新。'); });
     if (ui.emptyBurnBtn) ui.emptyBurnBtn.addEventListener('click', openBurnAllEmpty);

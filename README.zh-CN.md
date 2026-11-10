@@ -5,6 +5,7 @@
 ## 功能
 
 - 读取真实 V4 池状态、仓位、tick 与流动性分布。
+- 两个官方 KNTQ/HYPE Uniswap V4 池：**1%**（`fee` 10000，`tickSpacing` 200，poolId `0xc96bfd21d36f8e7252f0d80fcb5f3bcacdf47c8b927b20711104713ebeb383ac`）和 **0.3%**（`fee` 3000，`tickSpacing` 60，hooks `0`，poolId `0xf9b8a9101438145d62c9f03156b203c6c573931167e2d36f9061a32575706c8a`）。行情、分布和添加流动性可以切换费率；汇总始终包含两个池，每个 NFT 用自己的 poolKey 计价。
 - 投入价值、目前价值、净 PnL、无常损失（IL）、待领手续费、**已领取手续费**。
 - 已领取手续费**继续计入 PnL**，直到可选销毁空 NFT；普通 100% 撤池不会清除。仓位卡显示累计已领 USD。
 - 5m / 30m / 1h 年化、未来 1 天预估收益；价格/估值 20 秒刷新，完整仓位扫描 60 秒。
@@ -22,7 +23,7 @@
 
 服务端不会索要助记词或私钥，也不会广播交易。只有领取手续费、撤池和添加流动性时，浏览器钱包才会签名。没有自动放宽滑点、自动重发或私钥处理。
 
-默认 `ui.defaultAddress` 为空，页面进入连接钱包模式；只有想做手机只读看板时才填入公开地址。
+默认 `ui.defaultAddress` 为空，页面进入连接钱包模式，并提示如何连接或在本地填写地址。`ui.hypeReference` 在仓库里保持 `0`。只有做手机只读看板时，才在不提交的本地配置里填写公开地址。
 
 ## 快速开始
 
@@ -40,9 +41,9 @@ python3 server.py --no-open --port 8097
 编辑 `config.json`：
 
 - `network.rpcUrls`：只填 Elysium 官方 RPC。
-- `uniswap.*`：公开的 V4 池、PoolManager、StateView、PositionManager 地址。
-- `ui.defaultAddress`：留空则连接钱包；填地址则只读查看。
-- `ui.hypeReference`：仅作为 HYPE 小窗口的参考数量；填 `0` 隐藏参考。
+- `uniswap.*` 与 `uniswap.pools`：公开的 PoolManager、StateView、PositionManager，以及上面两个池。`uniswap.poolId` 是默认的 1% 视图。
+- `ui.defaultAddress`：仓库里保持 `""`。页面会提示连接钱包；只读地址只写在不提交的本地配置里。
+- `ui.hypeReference`：仓库里保持 `0`，不要写入个人资金 baseline。
 - `ui.hyperEvmRpc`：读取 HyperEVM 钱包 HYPE 的 RPC。
 - `safety.*`：过期阈值和显示限制。
 
@@ -68,17 +69,19 @@ PnL 口径：
 
 ## 可选 Bark 定时报告
 
-`scripts/hourly_report.js` 是可选只读 Node.js 任务。为了兼容保留了文件名；可以按任意间隔运行，例如每 5 分钟：
+`report.js` 是可选只读 Node.js 任务。它覆盖配置里的两个池，每个 NFT 用自己的 poolKey 计价，对瞬时 RPC 失败重试，并在已知活跃仓位既未确认关闭、也未完整读到时拒绝发送，避免半份报告。
 
 ```bash
 export BARK_KEY="你的 Bark key"
-export DEFAULT_ADDRESS="0x..."
-node scripts/hourly_report.js
+export DEFAULT_ADDRESS="0xYourPublicAddress"
+node report.js
 ```
+
+`scripts/hourly_report.js` 只是把同一次任务转发给 `report.js`，不要和 `report.js` 同时挂定时器。未配置钱包时，脚本会直接说明如何设置 `DEFAULT_ADDRESS`，不会访问 RPC，也不会把这次配置缺口当成故障推送。
 
 消息包含待领手续费、净 PnL、已领手续费、区间距离、HYPE 合计和时间。`isArchive: 1` 会保留历史；脚本只读链上数据。
 
-systemd 可用 `OnCalendar=*:0/5` 实现 5 分钟一次。`BARK_KEY` 放在权限 `600` 的 `EnvironmentFile` 里，不要提交到仓库。
+示例单元在 `deploy/`。仓库不会替你开启 GitHub Actions 或定时任务。若自行安装，`OnCalendar=*:0/5` 是 5 分钟一次。`BARK_KEY` 放在权限 `600` 或 `640` 的 `EnvironmentFile` 里，不要提交到仓库。
 
 ### Bark 提醒
 
@@ -102,11 +105,19 @@ systemd 可用 `OnCalendar=*:0/5` 实现 5 分钟一次。`BARK_KEY` 放在权�
 
 ## 限制
 
-- 只做 KNTQ/HYPE 单池。
+- 只做上面的 KNTQ/HYPE 1% 与 0.3% 两个池，不包含其他交易对。
 - 已内置添加流动性面板；没有自动 swap、自动调仓或自动重发交易。
 - 建仓后加过流动性时，投入价值为估算。
 - 已领记录从本功能上线后开始保存；直接在其他钱包操作或上线前的领取不会自动回溯。
 - HYPE/USD、KNTQ/USD 是行情估算，不保证成交价。
+
+## 安全部署
+
+- `server.py` 只监听 `127.0.0.1`，前面用你自己的反向代理，并先加上登录认证。不要把 8097 暴露到公网。
+- 不要提交钱包、Bark 设备 key、领取记录、提醒状态、HYPE baseline 或 NFT 列表。这些运行时文件已在 `.gitignore`；示例只在 `deploy/*.example`。
+- `deploy_vps.sh` 只有在 `ELYSIUM_INSTALL=1` 时才安装本机 Web 服务，并且不会安装 Bark timer。
+- 本仓库不包含另一套登录项目。生产环境的反代配置和 EnvironmentFile 不要放进 git。
+- `config.json` 里只保留公开合约地址和两个 poolId。
 
 ## 许可
 

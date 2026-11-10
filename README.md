@@ -12,6 +12,7 @@ An **Elysium mainnet (chainId 99901) Uniswap V4 KNTQ/HYPE LP dashboard**. On-cha
 ## Features / 功能
 
 - Reads real V4 pool state, positions, ticks and liquidity distribution from Elysium.
+- Two official KNTQ/HYPE Uniswap V4 pools: **1%** (`fee` 10000, `tickSpacing` 200, poolId `0xc96bfd21d36f8e7252f0d80fcb5f3bcacdf47c8b927b20711104713ebeb383ac`) and **0.3%** (`fee` 3000, `tickSpacing` 60, hooks `0`, poolId `0xf9b8a9101438145d62c9f03156b203c6c573931167e2d36f9061a32575706c8a`). Switch the fee tier for price, distribution and new liquidity. Totals always include both pools, and each NFT is priced with its own poolKey.
 - Entry value, current value, net PnL, IL, pending fees and **claimed fees**.
 - **Claimed fees are kept in PnL** until an optional empty-NFT burn; a normal full withdrawal does not clear them. The position card shows the cumulative claimed USD amount.
 - 5m / 30m / 1h APR, next-day estimated yield, a 20-second price/valuation refresh and a 60-second full position scan.
@@ -56,9 +57,9 @@ No third-party Python packages are required. The ethers.js browser bundle is ven
 Edit `config.json`:
 
 - `network.rpcUrls`: official Elysium RPC.
-- `uniswap.*`: public pool, PoolManager, StateView and PositionManager addresses.
-- `ui.defaultAddress`: leave empty to connect a wallet; set an address for read-only viewing.
-- `ui.hypeReference`: optional HYPE amount used only as a reference line in the HYPE strip. Use `0` to hide the reference. The HYPE strip also has an inline editor; saving updates the local server reference used by the Bark report.
+- `uniswap.*` and `uniswap.pools`: public PoolManager, StateView, PositionManager and the two pool descriptors above. `uniswap.poolId` is the default 1% view.
+- `ui.defaultAddress`: keep `""` in git. The page then asks you to connect a wallet. A read-only address may be set only in a local uncommitted config.
+- `ui.hypeReference`: keep `0` in git so no personal HYPE baseline is published. The HYPE strip editor can save a local reference for the Bark report.
 - `ui.hyperEvmRpc`: HyperEVM RPC used for the HYPE wallet balance.
 - `safety.*`: stale thresholds and display limits.
 
@@ -84,17 +85,21 @@ A full withdrawal uses `DECREASE_LIQUIDITY + TAKE_PAIR` and **does not burn the 
 
 ## Optional periodic Bark report / Bark 定时报告
 
-`scripts/hourly_report.js` is an optional read-only Node.js job. The filename is kept for compatibility; run it at any interval, for example every 5 minutes:
+`report.js` is the optional read-only Node.js job. It covers both configured pools, prices each NFT from that NFT's own poolKey, retries transient RPC failures, and refuses to send Bark when a previously active position is neither confirmed closed nor fully read.
 
 ```bash
 export BARK_KEY="your-bark-key"
-export DEFAULT_ADDRESS="0x..."
-node scripts/hourly_report.js
+export DEFAULT_ADDRESS="0xYourPublicAddress"
+node report.js
 ```
+
+`scripts/hourly_report.js` only forwards to `report.js` once. Schedule one of them, not both.
+
+With an empty `ui.defaultAddress` and no `DEFAULT_ADDRESS`, the job exits immediately and prints how to set the public address. It does not call RPC and does not send a failure push for that configuration gap.
 
 It sends pending fees, net PnL, claimed fees, range distance, HYPE total and timestamp. `isArchive: 1` keeps the message in Bark history. The script never signs transactions.
 
-If you use systemd, a timer such as `OnCalendar=*:0/5` gives a five-minute cadence. Keep `BARK_KEY` in an `EnvironmentFile` with mode `600`, not in the repository.
+Example systemd units are in `deploy/`. They are templates only: this repository does not enable GitHub Actions or a timer for you. If you install a timer locally, `OnCalendar=*:0/5` is a five-minute cadence. Keep `BARK_KEY` in an `EnvironmentFile` with mode `600` or `640`, not in the repository. See `deploy/elysium-lp-report.env.example`.
 
 ### Bark alerts / Bark 提醒
 
@@ -116,11 +121,19 @@ The 5-minute report also evaluates the **freshly read current positions**:
 
 ## Limitations / 限制
 
-- Single pool: KNTQ/HYPE. Other-pool dashboards are not included.
+- KNTQ/HYPE only, on the 1% and 0.3% pools above. Other pairs are not included.
 - Built-in add-liquidity panel; there is no automatic swap, rebalancing or transaction retry.
 - If liquidity was added after mint, entry value is approximate.
 - Claimed-fee history is recorded from this UI after the journal feature is deployed. Claims made directly in a wallet or before the feature are not reconstructed automatically.
 - HYPE/USD and KNTQ/USD are market estimates, not execution guarantees.
+
+## Secure self-hosting / 安全部署
+
+- Run `server.py` on `127.0.0.1` and put your own reverse proxy in front. Add authentication there before exposing the site. Do not publish port 8097.
+- Do not commit wallets, Bark device keys, claim journals, alert state, HYPE baselines or NFT lists. Those runtime files are gitignored. Examples live in `deploy/*.example`.
+- `deploy/elysium-lp.service.example` binds localhost. `deploy_vps.sh` installs that web service only after `ELYSIUM_INSTALL=1` and does not install the Bark timer.
+- This repository does not include a separate login app. Wire authentication in your own proxy, and do not copy a production Caddyfile or EnvironmentFile into git.
+- Only public chain addresses and the two pool ids belong in `config.json`.
 
 ## License
 

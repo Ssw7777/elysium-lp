@@ -126,6 +126,63 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
+
+def _validate_pool_descriptor(entry: dict[str, Any], label: str) -> None:
+    if not isinstance(entry, dict):
+        raise ValueError(f"{label} must be an object")
+    pool_id = entry.get("poolId")
+    if not isinstance(pool_id, str) or not re.match(r"^0x[0-9a-fA-F]{64}$", pool_id):
+        raise ValueError(f"invalid {label}.poolId")
+    key = entry.get("poolKey")
+    if not isinstance(key, dict):
+        raise ValueError(f"{label}.poolKey missing")
+    for field in ("currency0", "currency1", "hooks"):
+        if not ADDRESS_RE.match(str(key.get(field, ""))):
+            raise ValueError(f"invalid address: {label}.poolKey.{field}")
+    try:
+        fee = int(entry.get("fee"))
+        spacing = int(entry.get("tickSpacing"))
+        key_fee = int(key.get("fee"))
+        key_spacing = int(key.get("tickSpacing"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} fee/tickSpacing must be integers") from exc
+    if fee != key_fee or spacing != key_spacing:
+        raise ValueError(f"{label} fee/tickSpacing does not match poolKey")
+    if fee <= 0 or spacing <= 0:
+        raise ValueError(f"{label} fee and tickSpacing must be positive")
+
+
+def _validate_shareable_defaults(config: dict[str, Any]) -> None:
+    ui = config.get("ui") if isinstance(config.get("ui"), dict) else {}
+    address = str(ui.get("defaultAddress") or "").strip()
+    if address and not ADDRESS_RE.match(address):
+        raise ValueError(
+            "ui.defaultAddress must be empty or a public 0x address. "
+            "Leave it empty in git and set it only in a local config or DEFAULT_ADDRESS."
+        )
+    reference = ui.get("hypeReference", 0)
+    if isinstance(reference, bool) or not isinstance(reference, (int, float)) or reference < 0:
+        raise ValueError("ui.hypeReference must be a number >= 0. Use 0 when no personal baseline is set.")
+
+
+def _validate_pool_list(config: dict[str, Any]) -> None:
+    _validate_pool_descriptor(config["uniswap"], "uniswap")
+    pools = config["uniswap"].get("pools")
+    if pools is None:
+        return
+    if not isinstance(pools, list) or not pools:
+        raise ValueError("uniswap.pools must be a non-empty list when set")
+    seen: set[str] = set()
+    for index, entry in enumerate(pools):
+        _validate_pool_descriptor(entry, f"uniswap.pools[{index}]")
+        lowered = str(entry["poolId"]).lower()
+        if lowered in seen:
+            raise ValueError("uniswap.pools contains a duplicate poolId")
+        seen.add(lowered)
+    if str(config["uniswap"]["poolId"]).lower() not in seen:
+        raise ValueError("uniswap.poolId must also be listed in uniswap.pools")
+
+
 def validate_config(config: dict[str, Any]) -> None:
     required = [
         ("network", "chainId"),
@@ -172,6 +229,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("safety.staleQuoteSeconds out of range")
     if not (0 < int(config["safety"].get("maxSlippageBps", 300)) <= 1000):
         raise ValueError("safety.maxSlippageBps out of range")
+    _validate_pool_list(config)
+    _validate_shareable_defaults(config)
 
 
 @dataclass
